@@ -239,6 +239,19 @@ object Api {
             )
         }
 
+    /**
+     * The same rows as a file, with a filename safe to save under.
+     *
+     * [title] is what the screen is showing. The core can fall back to
+     * the name inside the CSV, but that column is blank for anything
+     * claimed before the content feed had a name for it — and a file
+     * called after a GUID is a file nobody finds again.
+     */
+    suspend fun offerCsv(offerId: String, title: String): OfferCsvFile {
+        val r = obj("offer_csv", JSONObject().put("offerId", offerId).put("title", title))
+        return OfferCsvFile(fileName = r.getString("fileName"), text = r.getString("text"))
+    }
+
     // ------------------------------------------------------------ misc
 
     suspend fun publicIp(): String = obj("public_ip").getString("ip")
@@ -337,6 +350,11 @@ data class OfferCode(
     /** The link or store token the claim minted. */
     val code: String,
     val claimedDate: String,
+)
+
+data class OfferCsvFile(
+    val fileName: String,
+    val text: String,
 )
 
 data class FarmTitle(val titleId: String, val name: String)

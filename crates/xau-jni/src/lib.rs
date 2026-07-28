@@ -447,6 +447,23 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
                     Ok(o) => (o, None),
                     Err(e) => (Vec::new(), Some(e.to_string())),
                 };
+                // Write back every claimed reward we can see.
+                //
+                // The CSVs used to be written only by the claim itself,
+                // which made the record write-once: delete the file, or
+                // claim on the Xbox app instead of here, and the code was
+                // gone from this app for good even though the service
+                // still returns it. Refreshing on every read makes the
+                // record self-healing, and costs nothing — the same
+                // bytes are rewritten over themselves.
+                for o in offers.iter().filter(|o| o.resource.is_some()) {
+                    let title = names.get(&o.offer_id).map(|n| n.title.as_str());
+                    if let Err(e) =
+                        xau_mobile::offers_csv::write_offer(s.gamertag(), s.xuid(), o, title)
+                    {
+                        tracing::warn!("não deu para gravar o CSV de {}: {e}", o.offer_id);
+                    }
+                }
                 out.push(json!({
                     "xuid": s.xuid(),
                     "gamertag": s.gamertag(),
@@ -490,6 +507,22 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
                     })
                     .collect::<Vec<_>>(),
             ))
+        }
+
+        // The same rows as a file the user can keep. The text crosses
+        // the bridge rather than a path: the CSVs live in the app's
+        // private directory, which nothing else on the phone can open,
+        // so the download is a copy written where the user chooses.
+        "offer_csv" => {
+            // An empty id matches the suffix `_.csv`, which matches
+            // nothing, and would hand back a header-only file as a
+            // success — indistinguishable from "nothing claimed yet".
+            let offer_id = arg("offerId");
+            if offer_id.is_empty() || !offer_id.chars().all(|c| c.is_ascii_alphanumeric()) {
+                return Err(Error::other("vantagem inválida"));
+            }
+            let csv = xau_mobile::offers_csv::csv_for_offer(&offer_id, &arg("title"))?;
+            Ok(json!({ "fileName": csv.file_name, "text": csv.text }))
         }
 
         "claim_offers_all" => {

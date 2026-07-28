@@ -1,6 +1,8 @@
 package com.xau.rewards.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -35,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
@@ -47,7 +50,9 @@ import com.xau.rewards.core.OfferCode
 import com.xau.rewards.ui.theme.Radius
 import com.xau.rewards.ui.theme.Space
 import com.xau.rewards.ui.theme.Xau
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Game Pass member offers, across every account.
@@ -426,11 +431,45 @@ private fun OfferCodesScreen(g: OfferGroup, onBack: () -> Unit, onCopy: (String)
     // bubble, but nothing below it does, and a tap that appears to do
     // nothing reads as a broken button.
     var copied by remember(g.offerId) { mutableStateOf<Int?>(null) }
+    // What came of the last save.
+    var saved by remember(g.offerId) { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
 
     LaunchedEffect(g.offerId) {
         runCatching { Api.offerCodes(g.offerId) }
             .onSuccess { rows = it }
             .onFailure { error = it.message }
+    }
+
+    // The system's own save dialog. The CSVs live in the app's private
+    // directory, which nothing else on the phone can open, so a download
+    // is a copy written wherever the user points — and this is the one
+    // way to write there that asks for no storage permission at all.
+    val save = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/csv"),
+    ) { uri ->
+        // A cancelled dialog is an answer, not a failure. Say nothing.
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            runCatching {
+                // Read again here, not when the button was tapped: the
+                // picker can sit open for minutes, and a claim landing in
+                // that window belongs in the file the user is watching
+                // themselves save.
+                val file = Api.offerCsv(g.offerId, g.title)
+                withContext(Dispatchers.IO) {
+                    // "wt" truncates. Plain "w" does not on most
+                    // providers, so overwriting a longer file would leave
+                    // its tail behind and a spreadsheet would show a
+                    // phantom extra row of somebody else's codes.
+                    context.contentResolver.openOutputStream(uri, "wt")?.use {
+                        it.write(file.text.toByteArray(Charsets.UTF_8))
+                    } ?: error("o sistema não abriu o arquivo")
+                }
+            }
+                .onSuccess { saved = "CSV salvo" }
+                .onFailure { saved = "não deu para salvar: ${it.message}" }
+        }
     }
 
     Column(
@@ -458,11 +497,43 @@ private fun OfferCodesScreen(g: OfferGroup, onBack: () -> Unit, onCopy: (String)
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    rows?.let { plural(it.size, "1 código salvo", "${it.size} códigos salvos") }
+                    saved
+                        ?: rows?.let {
+                            plural(it.size, "1 código salvo", "${it.size} códigos salvos")
+                        }
                         ?: "lendo o CSV…",
                     style = Xau.type.caption,
-                    color = c.textSecondary,
+                    color = if (saved != null) c.green else c.textSecondary,
                 )
+            }
+            // Only offered once there is something in the file. An empty
+            // download is a worse answer than no button.
+            if (!rows.isNullOrEmpty()) {
+                Spacer(Modifier.width(Space.sm))
+                Box(
+                    Modifier
+                        .height(Space.touch)
+                        .clip(RoundedCornerShape(Radius.control))
+                        .background(c.surfaceHigh)
+                        .clickable {
+                            scope.launch {
+                                saved = null
+                                // Only the name is needed now — the
+                                // contents are read when the file is
+                                // actually written. `launch` itself can
+                                // throw on a ROM with no document
+                                // picker, which would take the app down
+                                // from inside a click.
+                                runCatching {
+                                    save.launch(Api.offerCsv(g.offerId, g.title).fileName)
+                                }.onFailure {
+                                    saved = "este aparelho não tem onde salvar arquivos"
+                                }
+                            }
+                        }
+                        .padding(horizontal = Space.lg),
+                    contentAlignment = Alignment.Center,
+                ) { Text("Baixar CSV", style = Xau.type.button, color = c.textPrimary) }
             }
         }
 
