@@ -1,6 +1,11 @@
 package com.xau.rewards.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -624,18 +629,68 @@ private fun TabBar() {
 /**
  * How far this account is through the 8-titles-for-15-minutes mission.
  *
- * When it completes the points appear as unclaimed and the auto-claim in
- * AppViewModel settles them without a tap — so the bar filling is the
- * whole interaction, and there is nothing for the user to do at the end.
+ * The core only reports progress when the UI polls it, which is once a
+ * minute — so drawing the snapshot directly would make the bar jump in
+ * minute-sized steps and the clock sit frozen between them. Instead the
+ * snapshot is treated as a fix taken at a known instant, and the seconds
+ * since are added locally. The bar is then animated to that target, so
+ * it advances smoothly and a poll that confirms what was already
+ * predicted causes no visible jump at all.
+ *
+ * When the mission completes the points land as unclaimed and the
+ * auto-claim settles them without a tap, so filling this bar is the
+ * whole interaction.
  */
 @Composable
 private fun MissionProgress(account: Account) {
     val c = Xau.colors
-    val pct = ((account.farmPercent ?: 0f) / 100f).coerceIn(0f, 1f)
-    val elapsed = (account.farmElapsed ?: 0L) / 60
-    val total = ((account.farmTotal ?: 900L) / 60).coerceAtLeast(1L)
+    val total = (account.farmTotal ?: 900L).coerceAtLeast(1L)
+    val fix = account.farmElapsed ?: 0L
+
+    // Restarts whenever a fresh snapshot arrives, so local counting is
+    // always measured from the most recent real number rather than
+    // drifting away from it.
+    var since by remember(account.xuid, fix) { mutableStateOf(0L) }
+    LaunchedEffect(account.xuid, fix) {
+        while (true) {
+            delay(1_000)
+            since += 1
+        }
+    }
+
+    val elapsed = (fix + since).coerceIn(0L, total)
+    val remaining = (total - elapsed).coerceAtLeast(0L)
+    val target = elapsed.toFloat() / total.toFloat()
+
+    val animated by animateFloatAsState(
+        targetValue = target,
+        // One second of travel for one second of progress: the bar moves
+        // at the same rate the clock does, so they never disagree.
+        animationSpec = tween(durationMillis = 1_000, easing = LinearEasing),
+        label = "mission",
+    )
 
     Column {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Missão de 15 min · 8 jogos",
+                style = Xau.type.caption,
+                color = c.textMuted,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                "${(animated * 100).toInt()}%",
+                style = Xau.type.captionStrong,
+                color = c.green,
+            )
+            Spacer(Modifier.width(Space.sm))
+            Text(
+                clock(remaining),
+                style = Xau.type.captionStrong,
+                color = if (remaining == 0L) c.green else c.textSecondary,
+            )
+        }
+        Spacer(Modifier.height(Space.sm))
         Box(
             Modifier
                 .fillMaxWidth()
@@ -645,26 +700,20 @@ private fun MissionProgress(account: Account) {
         ) {
             Box(
                 Modifier
-                    .fillMaxWidth(pct)
+                    .fillMaxWidth(animated)
                     .height(6.dp)
                     .clip(RoundedCornerShape(Radius.pill))
                     .background(c.green),
             )
         }
-        Spacer(Modifier.height(Space.sm))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(
-                "8 jogos · missão de 15 min",
-                style = Xau.type.caption,
-                color = c.textMuted,
-            )
-            Text(
-                "$elapsed de $total min",
-                style = Xau.type.caption,
-                color = c.textSecondary,
-            )
-        }
     }
+}
+
+/** Seconds as `mm:ss`, counting down. */
+private fun clock(seconds: Long): String {
+    val m = seconds / 60
+    val s = seconds % 60
+    return "%d:%02d".format(m, s)
 }
 
 // ----------------------------------------------------------- dialog

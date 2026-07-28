@@ -140,6 +140,7 @@ impl XboxClient {
             c::header_values::CONTRACT_VERSION_5,
         )])?;
         let raw: serde_json::Value = self.request_json(Method::GET, &url, headers, None).await?;
+        log_activity_shape(&raw);
         Ok(parse_program_info(&raw))
     }
 
@@ -223,6 +224,59 @@ impl XboxClient {
 /// `locked` means unavailable, and only **`completed`/`Unclaimed`** is
 /// claimable right now. Treating `active` as claimable would list every
 /// quest the user has not done yet as if points were waiting.
+/// Report the shape of every activity the payload carries.
+///
+/// Answers one question: can the app tell that today's
+/// play-8-titles-for-15-minutes mission is ALREADY satisfied, so it does
+/// not farm for points that are not on offer? Logs each activity's name
+/// and status fields only -- never the whole payload, which carries the
+/// account's balances and history.
+fn log_activity_shape(v: &serde_json::Value) {
+    fn walk(v: &serde_json::Value, out: &mut Vec<String>, depth: usize) {
+        if depth > 8 || out.len() > 30 {
+            return;
+        }
+        match v {
+            serde_json::Value::Object(map) => {
+                if map.contains_key("activityId") {
+                    let pick = |k: &str| {
+                        map.get(k)
+                            .map(|x| match x {
+                                serde_json::Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            })
+                            .unwrap_or_else(|| "-".into())
+                    };
+                    out.push(format!(
+                        "name={} status={} label={} max={} progress={} points={}",
+                        pick("name"),
+                        pick("status"),
+                        pick("statusLabel"),
+                        pick("maxCompletions"),
+                        pick("progress"),
+                        pick("points"),
+                    ));
+                }
+                for val in map.values() {
+                    walk(val, out, depth + 1);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for it in items {
+                    walk(it, out, depth + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    walk(v, &mut found, 0);
+    tracing::info!(count = found.len(), "rewards activity probe");
+    for line in found {
+        tracing::info!("  {line}");
+    }
+}
+
 fn parse_program_info(v: &serde_json::Value) -> RewardsInfo {
     let balance = v
         .get("balance")
