@@ -15,27 +15,53 @@ val keystoreProps = Properties().apply {
 }
 
 /**
- * Copy the Rust library into jniLibs before it is packaged.
+ * Copy the Rust libraries into jniLibs before they are packaged.
  *
  * jniLibs/ is a build output and therefore gitignored, so without this
  * a fresh clone silently produces an APK with no core in it — and worse,
  * an existing checkout packages whatever .so was left there last time.
  * A stale native library is invisible until the app misbehaves at
  * runtime, which is exactly the bug worth spending a task on.
+ *
+ * Two ABIs, for two different jobs:
+ *   arm64-v8a — every real phone since ~2019. This is what ships.
+ *   x86_64    — the emulator, and nothing else. An x86_64 image on an
+ *               x86_64 host runs at native speed; an arm64 image has to
+ *               translate every instruction, which is the difference
+ *               between a testing tool and a stopwatch.
+ * A missing ABI is a warning, not an error: building only arm64 is the
+ * normal case for a release, and failing the build over an emulator
+ * library nobody asked for would be obnoxious.
  */
-val syncNativeLib by tasks.registering(Copy::class) {
-    val built = rootProject.file("../target-android/aarch64-linux-android/release/libxau_jni.so")
-    from(built)
-    into(layout.projectDirectory.dir("src/main/jniLibs/arm64-v8a"))
-    onlyIf {
-        if (!built.exists()) {
-            logger.warn("libxau_jni.so not found — run build-android.cmd first")
+val NATIVE_ABIS = mapOf(
+    "arm64-v8a" to "aarch64-linux-android",
+    "x86_64" to "x86_64-linux-android",
+)
+
+val syncNativeLibs by tasks.registering {
+    val jniLibs = layout.projectDirectory.dir("src/main/jniLibs")
+    val sources = NATIVE_ABIS.mapValues { (_, triple) ->
+        rootProject.file("../target-android/$triple/release/libxau_jni.so")
+    }
+    // Declared so Gradle can skip the task when nothing moved, instead
+    // of re-copying on every single build.
+    inputs.files(sources.values.filter { it.exists() })
+    outputs.dir(jniLibs)
+
+    doLast {
+        sources.forEach { (abi, src) ->
+            if (!src.exists()) {
+                logger.warn("no $abi core at ${src.path} — run build-android.cmd for that target")
+                return@forEach
+            }
+            val dest = jniLibs.dir(abi).asFile
+            dest.mkdirs()
+            src.copyTo(File(dest, "libxau_jni.so"), overwrite = true)
         }
-        built.exists()
     }
 }
 
-tasks.named("preBuild") { dependsOn(syncNativeLib) }
+tasks.named("preBuild") { dependsOn(syncNativeLibs) }
 
 android {
     namespace = "com.xau.rewards"
@@ -51,9 +77,10 @@ android {
         versionCode = 2
         versionName = "1.0.1"
 
-        // Only arm64. Every Android phone shipped since 2019 is arm64,
-        // and each extra ABI adds ~12 MB of Rust to the APK for devices
-        // this app will never run on.
+        // Only arm64 by default. Every Android phone shipped since 2019
+        // is arm64, and each extra ABI adds several MB of Rust to the
+        // APK for devices this app will never run on. The debug build
+        // type adds x86_64 on top, for the emulator.
         ndk { abiFilters += "arm64-v8a" }
     }
 
@@ -71,6 +98,10 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
+            // x86_64 rides along in debug ONLY, so the app can be run in
+            // an emulator at native speed. It never reaches a release
+            // APK, where it would be pure weight.
+            ndk { abiFilters += "x86_64" }
         }
         release {
             // R8 is OFF for now, deliberately. Minification changes what
