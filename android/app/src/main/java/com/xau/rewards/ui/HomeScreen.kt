@@ -199,6 +199,7 @@ private fun TodayCard(state: UiState) {
     val up = state.accounts.count { (it.level ?: 0L) >= 2L }
     val unknown = state.accounts.count { it.level == null }
     val farming = state.accounts.count { it.farming }
+    val withGp = state.accounts.count { it.gamepass != null }
     val total = state.accounts.size
 
     Column(
@@ -239,6 +240,10 @@ private fun TodayCard(state: UiState) {
                 LevelTally("Nível 1", lv1, c.textSecondary)
                 Spacer(Modifier.height(Space.xs))
                 LevelTally("Nível 2 ou 3", up, c.green)
+                if (withGp > 0 || total > 0) {
+                    Spacer(Modifier.height(Space.xs))
+                    LevelTally("com Game Pass", withGp, c.green)
+                }
                 if (unknown > 0) {
                     Spacer(Modifier.height(Space.xs))
                     // Never folded into level 1: "has not levelled up"
@@ -443,18 +448,26 @@ private fun AccountRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.height(Space.xs))
+                // Badges on their own line and the mission count below.
+                // Crowding all three onto one row let the Ultimate badge
+                // squeeze the count down to "8 p...", which is the kind
+                // of truncation that only shows up on a real handset.
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     LevelBadge(account.level, stale)
-                    account.missionsOpen?.takeIf { it > 0 }?.let {
+                    account.gamepass?.let {
                         Spacer(Modifier.width(Space.sm))
-                        Text(
-                            "$it pendentes",
-                            style = Xau.type.caption,
-                            color = c.textSecondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        GamePassBadge(it)
                     }
+                }
+                account.missionsOpen?.takeIf { it > 0 }?.let {
+                    Spacer(Modifier.height(Space.xs))
+                    Text(
+                        "$it missões pendentes",
+                        style = Xau.type.caption,
+                        color = c.textSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
 
@@ -559,6 +572,38 @@ private fun LevelBadge(level: Long?, stale: Boolean) {
         Spacer(Modifier.width(Space.xs))
         Text("Nível ${level ?: "—"}", style = Xau.type.captionStrong, color = tint)
     }
+}
+
+/**
+ * Game Pass tier, when the account has one.
+ *
+ * Read from `gamePassMembership` in the same programInfo response the
+ * balance comes from, so it costs no extra request. Absent means no
+ * membership — which is exactly why one of these accounts sits at level
+ * 1 and cannot reach the Game Pass missions.
+ */
+@Composable
+private fun GamePassBadge(tier: String) {
+    val c = Xau.colors
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(Radius.pill))
+            .background(c.greenDeep)
+            .padding(horizontal = Space.sm, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(prettyTier(tier), style = Xau.type.captionStrong, color = c.onGreen)
+    }
+}
+
+/** `GamePassUltimate` -> `Ultimate`, `PCGamePass` -> `PC`. */
+private fun prettyTier(tier: String): String = when {
+    tier.contains("Ultimate", true) -> "Ultimate"
+    tier.contains("PC", true) -> "GP PC"
+    tier.contains("Console", true) -> "GP Console"
+    tier.contains("Core", true) -> "GP Core"
+    tier.contains("Standard", true) -> "GP Standard"
+    else -> "Game Pass"
 }
 
 @Composable

@@ -196,6 +196,8 @@ data class Account(
     /** How many activities are still earnable / already settled. */
     val missionsOpen: Int? = null,
     val missionsDone: Int? = null,
+    /** Game Pass tier as the service names it. Null = no membership. */
+    val gamepass: String? = null,
     val active: Boolean,
     /** Why this row's figures are missing, when they are. */
     val staleReason: String?,
@@ -253,6 +255,7 @@ private fun JSONArray.toAccounts(): List<Account> = map { o ->
         farmTotal = if (o.isNull("farmTotal")) null else o.getLong("farmTotal"),
         missionsOpen = if (o.isNull("missionsOpen")) null else o.getInt("missionsOpen"),
         missionsDone = if (o.isNull("missionsDone")) null else o.getInt("missionsDone"),
+        gamepass = if (o.isNull("gamepass")) null else o.getString("gamepass"),
         active = o.optBoolean("active"),
         staleReason = if (o.isNull("staleReason")) null else o.getString("staleReason"),
     )

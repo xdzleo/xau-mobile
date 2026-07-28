@@ -49,6 +49,10 @@ pub struct RewardsInfo {
     pub level: Option<i64>,
     /// Every activity the account can see, done or not.
     pub missions: Vec<Mission>,
+    /// Game Pass tier as the service names it, e.g. `PCGamePass`,
+    /// `GamePassUltimate`. `None` means no membership was reported —
+    /// which is what an account without Game Pass looks like.
+    pub gamepass: Option<String>,
 }
 
 /// One Rewards activity, whatever state it is in.
@@ -325,6 +329,25 @@ fn parse_program_info(v: &serde_json::Value) -> RewardsInfo {
 
     let level = find_level(v);
 
+    // Same response, no extra call: the programInfo body already carries
+    // the membership under one of two spellings. The capital-P form is
+    // current; the lowercase one is what older responses used, and the
+    // C# original expected. Accept both rather than betting on one.
+    let gamepass = ["gamePassMembership", "gamepassMembership"]
+        .iter()
+        .find_map(|k| {
+            v.get(k)
+                .or_else(|| v.get("data").and_then(|d| d.get(k)))
+                .or_else(|| {
+                    v.get("profile")
+                        .and_then(|p| p.get("attributes"))
+                        .and_then(|a| a.get(k))
+                })
+                .and_then(serde_json::Value::as_str)
+        })
+        .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("none"))
+        .map(str::to_string);
+
     let mut pending = Vec::new();
     collect_pending(v, &mut pending);
     let mut missions = Vec::new();
@@ -337,6 +360,7 @@ fn parse_program_info(v: &serde_json::Value) -> RewardsInfo {
         program,
         level,
         missions,
+        gamepass,
     }
 }
 

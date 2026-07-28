@@ -126,7 +126,7 @@ fn account_json(xuid: &str, gamertag: &str, pic: &str, score: i64) -> Value {
 }
 
 /// Describe every live session, merging in the balances held per xuid.
-type Balances = HashMap<String, (i64, i64, Option<i64>, usize, usize)>;
+type Balances = HashMap<String, (i64, i64, Option<i64>, usize, usize, Option<String>)>;
 
 async fn snapshot(balances: &Balances) -> Value {
     let sessions: Vec<Arc<Session>> = {
@@ -140,12 +140,13 @@ async fn snapshot(balances: &Balances) -> Value {
     for s in sessions {
         let (pic, score) = s.profile_display().await.unwrap_or_default();
         let mut row = account_json(s.xuid(), s.gamertag(), &pic, score);
-        if let Some((balance, unclaimed, level, open, done)) = balances.get(s.xuid()) {
+        if let Some((balance, unclaimed, level, open, done, gp)) = balances.get(s.xuid()) {
             row["balance"] = json!(balance);
             row["unclaimed"] = json!(unclaimed);
             row["level"] = json!(level);
             row["missionsOpen"] = json!(open);
             row["missionsDone"] = json!(done);
+            row["gamepass"] = json!(gp);
         }
         out.push(row);
     }
@@ -211,6 +212,7 @@ async fn refresh_all() -> Value {
                         info.level,
                         info.missions.iter().filter(|m| m.is_open()).count(),
                         info.missions.iter().filter(|m| m.is_done()).count(),
+                        info.gamepass.clone(),
                     ),
                 );
             }
