@@ -175,7 +175,7 @@ private fun Notice(text: String, onDismiss: () -> Unit) {
                 .background(Xau.colors.surfaceHigh)
                 .padding(horizontal = Space.lg, vertical = Space.md),
         ) {
-            Text(text, style = Xau.type.secondary, color = Xau.colors.textPrimary)
+            Text(text, style = Xau.type.body, color = Xau.colors.textPrimary)
         }
     }
 }

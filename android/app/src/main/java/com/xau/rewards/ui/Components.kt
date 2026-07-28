@@ -129,7 +129,7 @@ fun Modifier.pressable(onClick: () -> Unit, onLongClick: () -> Unit): Modifier {
 fun Modifier.pressableRow(onClick: () -> Unit, onLongClick: () -> Unit): Modifier =
     combinedClickable(
         interactionSource = remember { MutableInteractionSource() },
-        indication = androidx.compose.material3.ripple(color = Xau.colors.focus),
+        indication = androidx.compose.material3.ripple(color = Xau.colors.textPrimary),
         onClick = onClick,
         onLongClick = onLongClick,
     )
@@ -147,8 +147,8 @@ fun DotLeader(width: Dp, modifier: Modifier = Modifier) {
     Text(
         "·".repeat(40),
         modifier = modifier.width(width),
-        style = Xau.type.register,
-        color = Xau.colors.rule,
+        style = Xau.type.caption,
+        color = Xau.colors.outline,
         maxLines = 1,
         overflow = androidx.compose.ui.text.style.TextOverflow.Clip,
     )
@@ -168,7 +168,7 @@ fun DotLeader(width: Dp, modifier: Modifier = Modifier) {
 fun Figure(
     value: Long?,
     modifier: Modifier = Modifier,
-    style: androidx.compose.ui.text.TextStyle = Xau.type.figure,
+    style: androidx.compose.ui.text.TextStyle = Xau.type.rowFigure,
     color: Color = Xau.colors.textPrimary,
 ) {
     if (value == null) {
@@ -212,7 +212,7 @@ fun Skeleton(width: Dp, height: Dp, modifier: Modifier = Modifier) {
     Box(
         modifier
             .size(width, height)
-            .clip(RoundedCornerShape(Radius.chip))
+            .clip(RoundedCornerShape(Radius.control))
             .background(c.surfaceHigh)
             .background(
                 Brush.linearGradient(
@@ -245,7 +245,7 @@ fun LiveDot(active: Boolean, modifier: Modifier = Modifier) {
             .size(7.dp)
             .clip(RoundedCornerShape(50))
             .background(
-                if (active) c.brandBright.copy(alpha = alpha) else c.textMuted.copy(alpha = 0.5f)
+                if (active) c.green.copy(alpha = alpha) else c.textMuted.copy(alpha = 0.5f)
             )
     )
 }
@@ -256,7 +256,7 @@ fun SectionLabel(text: String, modifier: Modifier = Modifier) {
     Text(
         text.uppercase(Locale("pt", "BR")),
         modifier = modifier,
-        style = Xau.type.label,
+        style = Xau.type.captionStrong,
         color = Xau.colors.textMuted,
     )
 }
@@ -278,11 +278,11 @@ fun PrimaryButton(
     busy: Boolean = false,
 ) {
     val c = Xau.colors
-    val bg = if (enabled && !busy) c.volt else c.slabHigh
+    val bg = if (enabled && !busy) c.greenDeep else c.surfaceHigh
     // NEVER white on volt: that pairing measures about 1.3:1. Dark type
     // on a light field is the whole point — it is what makes a claim
     // read as signage rather than as neon, and it measures 15.09:1.
-    val fg = if (enabled && !busy) c.onVolt else c.muted
+    val fg = if (enabled && !busy) c.onGreen else c.textMuted
 
     Box(
         modifier
@@ -349,7 +349,7 @@ fun StateBlock(
         Text(title, style = Xau.type.section, color = tone ?: Xau.colors.textPrimary)
         Text(
             detail,
-            style = Xau.type.secondary,
+            style = Xau.type.body,
             color = Xau.colors.textSecondary,
             textAlign = TextAlign.Center,
         )
@@ -367,7 +367,7 @@ fun StatRow(label: String, value: String, valueColor: Color? = null) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, style = Xau.type.secondary, color = Xau.colors.textSecondary)
+        Text(label, style = Xau.type.body, color = Xau.colors.textSecondary)
         Text(value, style = Xau.type.rowTitle, color = valueColor ?: Xau.colors.textPrimary)
     }
 }

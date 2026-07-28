@@ -168,6 +168,12 @@ data class Account(
     /** Null until a read lands, and null again when one fails. */
     val balance: Long?,
     val unclaimed: Long?,
+    /**
+     * Rewards tier level. Null until the core reads `tiersProfile`,
+     * which it does not yet — so this renders as an em dash rather than
+     * as a confident "Nível 1" nobody verified.
+     */
+    val level: Long? = null,
     val farming: Boolean,
     val active: Boolean,
     /** Why this row's figures are missing, when they are. */
@@ -207,6 +213,7 @@ private fun JSONArray.toAccounts(): List<Account> = map { o ->
         // render as a real 0.
         balance = if (o.isNull("balance")) null else o.getLong("balance"),
         unclaimed = if (o.isNull("unclaimed")) null else o.getLong("unclaimed"),
+        level = if (o.isNull("level")) null else o.getLong("level"),
         farming = o.optBoolean("farming"),
         active = o.optBoolean("active"),
         staleReason = if (o.isNull("staleReason")) null else o.getString("staleReason"),

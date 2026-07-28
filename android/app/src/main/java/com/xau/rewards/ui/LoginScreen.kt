@@ -183,7 +183,7 @@ fun LoginScreen(
                         Spacer(Modifier.height(Space.sm))
                         Text(
                             "Validando o token e lendo o perfil.",
-                            style = Xau.type.secondary,
+                            style = Xau.type.body,
                             color = c.textSecondary,
                         )
                     }
