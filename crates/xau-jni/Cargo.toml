@@ -1,0 +1,34 @@
+[package]
+name = "xau-jni"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "JNI bridge exposing xau-mobile to the Android app"
+
+# cdylib is what Android's System.loadLibrary wants; rlib is what makes
+# the crate testable at all (a cdylib-only crate cannot be linked into a
+# test harness), so the dispatch tests can run on the host.
+[lib]
+name = "xau_jni"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+xau-mobile = { path = "../xau-mobile" }
+xau-core = { workspace = true }
+jni = "0.21"
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+# Rust's stdout goes nowhere on Android; without this every tracing line
+# is lost and a failing sign-in has no trail at all.
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.14"
+tracing-subscriber = { workspace = true }
+# android_logger speaks `log`, not `tracing`. Depending on it directly
+# rather than reaching through `tracing::log`, which is feature-gated.
+log = "0.4"
+
+[lints]
+workspace = true

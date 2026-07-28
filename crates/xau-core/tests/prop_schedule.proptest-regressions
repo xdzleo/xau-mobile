@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc bb6e85b109dc6f7a538ae4b2789ac425155eb60cbc840ccb7794095a4571c922 # shrinks to entries = [PlanEntry { title_id: "12345678", service_config_id: "", achievement_id: "ach-0", achievement_name: "", game_name: "", time_unlocked: "2020-09-13T12:26:40Z", gamerscore: None }, PlanEntry { title_id: "12345678", service_config_id: "", achievement_id: "ach-1", achievement_name: "", game_name: "", time_unlocked: "2022-04-27T08:08:53Z", gamerscore: None }, PlanEntry { title_id: "12345678", service_config_id: "", achievement_id: "ach-2", achievement_name: "", game_name: "", time_unlocked: "2022-05-23T07:46:07Z", gamerscore: None }], cap_secs = 2245035
+cc 1c9821aa0da30b1dde3b8da15fbf558d1ce8bbefcf057119648d5deb51886b64 # shrinks to entries = [PlanEntry { title_id: "12345678", service_config_id: "", achievement_id: "ach-0", achievement_name: "", game_name: "", time_unlocked: "2020-09-13T12:26:40Z", gamerscore: None }, PlanEntry { title_id: "12345678", service_config_id: "", achievement_id: "ach-1", achievement_name: "", game_name: "", time_unlocked: "2021-03-02T21:33:00Z", gamerscore: None }, PlanEntry { title_id: "12345678", service_config_id: "", achievement_id: "ach-2", achievement_name: "", game_name: "", time_unlocked: "2021-08-20T06:37:51Z", gamerscore: None }], mode = Scaled(0.01)

@@ -1,0 +1,19 @@
+# Workspace-wide cargo configuration.
+#
+# UI/perf wave: target-cpu = "x86-64-v3" enables the AVX2 / BMI2 /
+# FMA / F16C / MOVBE / OSXSAVE feature set, which every modern CPU
+# (Zen2+, Haswell+, ~2013 onwards) ships. Without this the release
+# binary compiles to baseline x86-64 (Pentium 4 era) — meaning
+# simd-json's AVX2 lanes, the scheduler's bit-twiddling, and rustc's
+# autovectoriser all run nerfed even on a Ryzen X3D.
+#
+# Trade-off: binary won't run on pre-2013 CPUs. Acceptable for this
+# project's actual user base. If you need to ship to ancient CPUs,
+# delete this file (or override RUSTFLAGS at build time).
+#
+# IMPORTANT: this file MUST live at `.cargo/config.toml`, NOT in the
+# workspace `Cargo.toml`. Cargo silently ignores `[build]` in the
+# manifest (warning: "unused manifest key: build").
+
+[build]
+rustflags = ["-C", "target-cpu=x86-64-v3"]

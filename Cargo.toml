@@ -1,0 +1,350 @@
+[workspace]
+resolver = "2"
+# The UI is a native Android app (see `android/`); Rust is reached
+# through the JNI bridge, so there is no Tauri shell any more.
+members = ["crates/xau-core", "crates/xau-mobile", "crates/xau-jni"]
+
+[workspace.package]
+version = "2.15.0"
+edition = "2021"
+rust-version = "1.75"
+license = "GPL-3.0-or-later"
+authors = ["Xbox Achievement Unlocker contributors"]
+repository = "https://github.com/Fumo-Unlockers/Xbox-Achievement-Unlocker"
+description = "Rust port of Xbox Achievement Unlocker (XAU)"
+
+[workspace.dependencies]
+xau-core = { path = "crates/xau-core", version = "2.15.0" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# SIMD-accelerated JSON parser. Drop-in via `simd_json::serde::from_slice`.
+# We only flip to simd-json on the one hot path — the bulk profile
+# achievements scan, where serde_json becomes the bottleneck at ~130 MB
+# of JSON per scan. Everywhere else stays on serde_json for simplicity.
+# `serde_impl` wires up the serde::Deserialize bridge so existing types
+# parse unchanged. Defaults include AVX2 runtime detection on Windows.
+simd-json = { version = "0.14", default-features = false, features = [
+    "serde_impl",
+    "runtime-detection",
+] }
+# mimalloc is Microsoft's general-purpose allocator — thread-local caches
+# + better multi-threaded scaling than the default Windows HeapAlloc the
+# msvc target uses. Hot workloads (JSON parse of a 126k-achievement
+# profile) are alloc-dominated, so the global allocator swap ranges
+# 5-15% faster wall-clock across the whole process.
+# `default-features = false` drops `secure` (guard pages for hardened
+# scenarios) — we don't need the hardening and it adds overhead.
+mimalloc = { version = "0.1", default-features = false }
+thiserror = "1"
+anyhow = "1"
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "gzip",
+    "deflate",
+    "json",
+    # NOTE: `native-tls` is enabled per-target (Windows only) in
+    # `crates/xau-core/Cargo.toml` under `[target.'cfg(windows)'.dependencies]`
+    # so non-Windows dev builds DON'T pull the full OpenSSL chain. The
+    # only consumer of native-tls is the `v20.events.data.microsoft.com`
+    # OneCollector telemetry endpoint, which requests TLS renegotiation
+    # mid-response — rustls refuses by design, schannel honours it. The
+    # endpoint itself is Windows-only via the events-bundle code path,
+    # so non-Windows builds gain nothing from carrying OpenSSL.
+    # Wave-7 audit dep-MED-4: this gate drops a third TLS stack from
+    # cross-platform builds. On Windows the binary is unchanged.
+    #
+    # NOTE: do NOT enable "http2". Xbox Live endpoints reject our explicit
+    # `Host:` header under HTTP/2 (it conflicts with the :authority pseudo-
+    # header), returning a bare IIS "400 Bad Request" HTML page. We stay on
+    # HTTP/1.1 where the Host header is both required and honored. The
+    # connection-pool + keepalive tuning below gives us most of the perf win
+    # anyway (HTTP/2 multiplexing would have been a marginal gain on top).
+] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "io-util",
+    "time",
+    "signal",
+    "sync",
+    "fs",
+] }
+axum = { version = "0.7", default-features = false, features = [
+    "http1",
+    "tokio",
+    "json",
+    "query",
+    "matched-path",
+] }
+tower = { version = "0.5", default-features = false }
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive", "env"] }
+directories = "5"
+rayon = "1"
+url = "2"
+# UI/perf wave: rustc-hash = the same FxHash the Rust compiler uses
+# for its own internal HashMaps. ~2× faster than the std SipHash on
+# string keys (achievement_ids, title_ids), no DoS-resistance — fine
+# here because all keys are server-controlled Xbox IDs, not arbitrary
+# user input. Used in bit_by_bit's hot scheduler loops.
+rustc-hash = "2"
+# For reading the Fumo-Unlockers Events.zip bundle used by the telemetry-
+# based achievement unlock path. No compression features beyond deflate
+# (the one the bundle actually uses).
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# ============================================================
+# Maximum-strict compiler lints.
+# ============================================================
+#
+# Goal: catch as many bugs at compile time as possible. Everything that
+# the Rust compiler / clippy can diagnose about correctness, soundness,
+# memory safety, or latent bugs is turned on at `warn` or `deny`.
+#
+# Organized into three bands:
+#   1. `rust` — rustc built-in lints. These are about the LANGUAGE
+#      itself: dead code, unreachable code, UB-adjacent patterns.
+#   2. `clippy::correctness` + `clippy::suspicious` — literal bugs
+#      clippy can prove. These are DENY.
+#   3. `clippy::pedantic` + `clippy::nursery` — style + perf hints.
+#      Kept at `warn` so they don't block builds but show up in output.
+#
+# Broad-enough suppressions for cases that trigger false positives in
+# this specific codebase are listed at the end with justifications.
+
+[workspace.lints.rust]
+# DENY: using these almost always means a bug.
+unused_must_use = "deny"
+unreachable_code = "deny"
+unreachable_patterns = "deny"
+overlapping_range_endpoints = "deny"
+deprecated_in_future = "deny"
+
+# WARN: unsafe is legal but we call it out on every use. Windows FFI
+# (memory scanner, WAM token broker) needs it; nothing else should.
+unsafe_code = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+# WARN: bug-adjacent patterns we want to know about.
+# `missing_debug_implementations` — nice-to-have but 13 struct types
+# across the codebase would need manual impls. Deferred.
+missing_debug_implementations = "allow"
+single_use_lifetimes = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unused_extern_crates = "warn"
+unused_import_braces = "warn"
+unused_lifetimes = "warn"
+unused_qualifications = "warn"
+variant_size_differences = "warn"
+# `let _ = something_with_destructor` is often intentional (fire and
+# forget a future, intentionally drop a mutex guard early). The
+# pattern is loud enough to reader-scan without the lint noise.
+let_underscore_drop = "allow"
+# Unconditional recursion across the whole dep graph.
+unconditional_recursion = "deny"
+# Future-incompat: warns about patterns the Rust team is likely to
+# make hard errors in a future edition.
+future_incompatible = { level = "warn", priority = -1 }
+# Missing docs on public items of this workspace. Keep at `warn` so the
+# build doesn't block while we catch up on the backlog.
+missing_docs = "allow"
+# `unreachable_pub` catches `pub` items that aren't actually reachable
+# externally — usually a sign `pub(crate)` was meant. Valuable but
+# ~36 existing sites fire (mostly in xau-cli command modules that were
+# `pub fn` for test harness access). Deferred to a cleanup PR; the
+# sites are low-risk (visibility downgrade is always safe).
+# unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+# ============ CORRECTNESS + SUSPICIOUS (DENY) ============
+#
+# Clippy's "correctness" group catches things it can prove are bugs.
+# "suspicious" is one step softer but still very high signal. Both as
+# DENY because letting them ship is actively harmful.
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+
+# ============ PERF / PEDANTIC (WARN), NURSERY (ALLOW) ============
+pedantic = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+# Nursery lints are experimental and many are noisy without being
+# actionable. We leave pedantic ON but nursery OFF — revisit as
+# nursery lints graduate to stable.
+nursery = { level = "allow", priority = -1 }
+# `style` group is already WARN by default in clippy; bumping it to
+# make sure it stays on even if defaults ever change.
+style = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+
+# ============ SPECIFIC DENIES (individual bug-prone patterns) ============
+# Printing to stdout/stderr from library code is almost always a
+# debugging leftover. We only start at WARN because the CLI, tests,
+# and examples still print intentionally today.
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+print_stdout = "warn"
+print_stderr = "warn"
+expect_used = "warn"
+# `expect` with a message is still better than a naked `unwrap`, but we
+# want every site visible until the remaining invariant boundaries are explicit.
+# Wildcard enum match arms would ideally warn, but in practice the 4
+# sites are defensive catchalls on stable wire-protocol enums — see
+# the allow below.
+# `indexing_slicing` catches `slice[i]`/`vec[i]` without explicit
+# bounds-check. In principle good, but our codebase threads bounded
+# indices through civil-calendar math, windows/chunks iteration, and
+# slice-based assertions — fixing all 127 sites would take a week
+# and most have compile-time bounds or `windows(2)` guarantees.
+# Left ALLOW with a blanket deferral; spot-fix at code-review time.
+indexing_slicing = "allow"
+# `arithmetic_side_effects` = "int overflow possible". Catches real
+# bugs but also every `secs * 1000`, `attempt + 1`, and
+# `Duration::from_millis(300 << attempt)` we have. ~95 sites — same
+# deferral logic as indexing_slicing above.
+arithmetic_side_effects = "allow"
+# Lossy casts + sign flips + truncations are common source of subtle
+# bugs; already in pedantic but re-asserting here.
+lossy_float_literal = "warn"
+# (panic lint is ALLOW in the suppression band below.)
+# `return ;` / `if x { return } else { ... }` style issues.
+needless_return = "warn"
+# Shadow `let text = ...; let text = ...` is idiomatic Rust — it's
+# how we pipeline transformations. Lint kept OFF to match community
+# style.
+shadow_unrelated = "allow"
+# Explicit `Result<(), ()>` — either carry a real error or use `bool`.
+result_unit_err = "warn"
+
+# ============ BROAD SUPPRESSIONS with rationale ============
+# Settings/Person mirror the JSON wire shape — refactoring into enums
+# would break compatibility with the original C# project.
+struct_excessive_bools = "allow"
+# URLs in `//!` module docs are fine; this lint is over-aggressive.
+doc_markdown = "allow"
+# `cast_possible_truncation` is now WARN globally (see WAVE 1 promotions
+# below). Legitimate Win32 FFI sites carry local #[allow] with rationale.
+# Several internal helpers keep a `Result` return type for API consistency
+# even when the current body can't fail.
+unnecessary_wraps = "allow"
+# Writing `crate::models::Achievement` vs `models::Achievement` is a
+# matter of taste and this lint noises more than it clarifies.
+module_name_repetitions = "allow"
+# `missing_errors_doc` / `missing_panics_doc` — nice-to-have but not
+# catching real bugs; turn off to reduce noise.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+# `must_use_candidate` hits every return-type that could be annotated
+# with `#[must_use]`. Too many false positives in builder-style APIs.
+must_use_candidate = "allow"
+# `too_many_lines` — we have a few long functions (build_plan, run_bulk)
+# that would actively become HARDER to read if split. Each has a
+# justification comment in-place.
+too_many_lines = "allow"
+# `multiple_crate_versions` is unfixable without waiting for deps to
+# align; not actionable by us.
+multiple_crate_versions = "allow"
+# Nursery-level style debates (single_char_pattern_uses etc.) that
+# aren't real bugs.
+option_if_let_else = "allow"
+missing_const_for_fn = "allow"
+redundant_pub_crate = "allow"
+# `significant_drop_tightening` fires on RwLock guards where the
+# broader scope is intentional (we want the guard held across an
+# early-return). False positives dominate.
+significant_drop_tightening = "allow"
+# `suboptimal_flops` is about f32/f64 transcendentals — irrelevant
+# for us and produces noise on timing math.
+suboptimal_flops = "allow"
+# `use_self` fires on `Foo::new` inside `impl Foo` even when the
+# readable form is better.
+use_self = "allow"
+# `bool_to_int_with_if` wants `usize::from(b)` over `if b {1} else {0}`.
+# Both are fine; not worth the noise.
+bool_to_int_with_if = "allow"
+# `cognitive_complexity` is noisy on match-heavy state machines.
+cognitive_complexity = "allow"
+# `branches_sharing_code` inverts readable if/else into tangled code.
+branches_sharing_code = "allow"
+# First doc comment paragraph too long — docs style.
+too_long_first_doc_paragraph = "allow"
+# `.unwrap_or(expensive())` is fine when the argument is a cheap
+# expression; clippy over-fires on simple cases.
+or_fun_call = "allow"
+# Wildcard match arms at times make the code more defensive when the
+# enum is stable and we really do mean "everything else".
+wildcard_enum_match_arm = "allow"
+# Panic in release code should stay rare and visible until the remaining
+# invariant panics are either removed or locally documented.
+panic = "warn"
+# `.unwrap()` / `.expect()` sometimes remain on invariant boundaries,
+# but we still want every site surfaced on clippy runs.
+unwrap_used = "warn"
+# `significant_drop_in_scrutinee` flags guards held across a match
+# arm — we intentionally hold some for atomicity.
+significant_drop_in_scrutinee = "allow"
+# `future_not_send` on GUI event loop code — the runtime that owns
+# these futures is single-thread so Send isn't required. Explicit
+# marker would just be boilerplate.
+future_not_send = "warn"
+
+# ============ WAVE 1 PROMOTIONS (boundary enforcement) ============
+#
+# See docs/ARCHITECTURE.md rules 4, 6, 7 and docs/BUGS_BLOCKED.md for
+# the bug history each of these blocks. Kept at DENY — every exception
+# needs a local #[allow] with a comment justifying it.
+#
+# Async-correctness:
+# - `await_holding_lock` catches R1 #3 (identity_swap) class — std Mutex
+#   held across .await deadlocks. Tokio's Mutex is fine.
+# - `fallible_impl_from` — `impl From<X>` that can panic hides the
+#   panic behind an infallible surface. Use TryFrom instead.
+# - `panic_in_result_fn` — Result-returning fn shouldn't panic;
+#   propagate the error the type promises.
+await_holding_lock = "deny"
+fallible_impl_from = "deny"
+panic_in_result_fn = "deny"
+# Matching on `Err(_)` with no pattern destructure is usually a bug
+# (you *meant* to inspect the kind). Would have caught R1 #1 panic
+# vs cancellation confusion in the bit-by-bit runner.
+match_wild_err_arm = "warn"
+# Disallowed methods/macros list lives in clippy.toml at repo root.
+# Lint is part of clippy's restriction group (default allow) — we
+# promote to warn so violations show in PR UI. Each ban in clippy.toml
+# carries a `reason` that surfaces in the warning message.
+disallowed_methods = "warn"
+disallowed_macros = "warn"
+#
+# NOTE on cast lints: `cast_possible_truncation`, `cast_possible_wrap`,
+# and `cast_sign_loss` are valuable BUT ~25 existing sites in
+# `events/bundle.rs`, `memory/win.rs`, `plan/builder.rs` etc. fire.
+# Promoting to `warn` now would swamp the signal; we'd lose any new
+# real fire in the noise. These will be tackled in a dedicated
+# "cast audit" PR that goes site-by-site with justification. For
+# now: left at the `allow` default, but the cast-that-caused-R1 #2
+# (d.as_secs() as i64) has a local comment and fix in place.
+
+[profile.release]
+# UI/perf wave: bumped from `thin` to `fat` LTO. Cross-crate
+# inlining is more aggressive — the Plan / scheduler hot path lives
+# in xau-core but is called from xau-cli / xau-gui / xau-server, and
+# fat-LTO inlines those boundaries away. Build time goes from ~1m25s
+# to ~2m; the produced binary is ~5-10% faster on CPU-bound paths
+# (bbb scheduler math, simd-json parses, mimalloc fast path).
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+
+[profile.dev]
+opt-level = 0
+debug = 1
+
+# NOTE: target-cpu = "x86-64-v3" lives in `.cargo/config.toml`, NOT
+# here. The `[build]` section in workspace `Cargo.toml` is silently
+# ignored by Cargo (caught by the warning "unused manifest key:
+# build"). See that file for the actual rustflags + rationale.

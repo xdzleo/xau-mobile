@@ -1,0 +1,55 @@
+# Clippy configuration for xau-rs.
+#
+# Primary use: `disallowed-methods` + `disallowed-macros` — compile-time
+# bans on call sites that tend to produce bugs we've seen before.
+# Each ban carries a `reason` that clippy surfaces in the warning
+# message, so the contributor knows the approved alternative without
+# reading docs.
+#
+# Severity lives in workspace Cargo.toml (`[workspace.lints.clippy]`):
+#   disallowed_methods = "warn"
+#   disallowed_macros  = "warn"
+#
+# The list has two tiers:
+#   [ZERO-SITE BANS]  — no existing violations; future additions caught.
+#   [GUIDANCE BANS]   — existing sites violate; migration via PR later.
+#
+# See ARCHITECTURE.md for the rules each ban enforces.
+# TOML inline-table syntax requires single-line entries; we collapse.
+
+disallowed-methods = [
+    # ZERO-SITE BANS
+    { path = "std::process::exit", reason = "propagate via Result<..., Error>; exit only at main() boundary" },
+    { path = "std::process::abort", reason = "propagate errors; abort is for UB-only contexts" },
+    { path = "std::thread::spawn", reason = "use tokio::task::spawn_blocking for CPU work; tokio::spawn (w/ Worker supervisor) for async" },
+    { path = "std::env::set_var", reason = "global env mutation is hard to test; use settings::Settings or fn params" },
+    { path = "std::env::remove_var", reason = "see env::set_var reason" },
+
+    # GUIDANCE BANS — existing sites tracked for migration
+    { path = "tokio::spawn", reason = "tasks need an owner + cancellation: use JoinSet or a Worker struct (ARCHITECTURE.md rule 7)" },
+    { path = "std::env::var", reason = "read via settings::Settings::load_or_default() for consistent config surface" },
+    { path = "std::env::var_os", reason = "see env::var reason" },
+]
+
+disallowed-macros = [
+    # NOTE: `std::unreachable!` was considered for the ban list but
+    # `tokio::select!` expands to `unreachable!()` internally, producing
+    # false positives at every `select!` call site in our runners.
+    # Real user `unreachable!()` sites (we have 2) are covered by
+    # local review and a comment block explaining why they're sound.
+    # Until clippy gains a "only user-written" flag for disallowed
+    # macros, this list stays empty.
+]
+
+# ============ Other clippy.toml knobs ============
+
+# Allow `unwrap`/`expect` inside test functions — tests SHOULD panic
+# loudly on unexpected conditions. Production code still has
+# unwrap_used / expect_used at warn in workspace config.
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true
+
+# Only Latin-script identifiers. Keeps code reviewable by anyone
+# without an input method for other scripts. Comments + strings are
+# unrestricted.
+allowed-scripts = ["Latin"]

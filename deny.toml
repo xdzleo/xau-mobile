@@ -1,0 +1,133 @@
+# cargo-deny configuration for xau-rs.
+#
+# Runs in CI (.github/workflows/security.yml). Policy decisions here
+# block PRs that introduce license-incompatible deps or known CVEs.
+#
+# Edit with care — loosening a policy is a conscious decision that
+# should reference the LICENSE or a CVE workaround.
+
+# ============================================================
+#  Advisories (RustSec database)
+# ============================================================
+[advisories]
+version = 2
+# `deny` any advisory in the crates we ship. If a CVE lands on a dep
+# we depend on, CI fails until we patch, replace, or explicitly ignore
+# it. Ignoring requires adding the RUSTSEC id below with a comment.
+yanked = "deny"
+ignore = [
+    # Add entries here as `"RUSTSEC-YYYY-NNNN", # reason` when
+    # an advisory has no upstream fix AND we've assessed the
+    # impact is tolerable. Keep the list short and reviewed
+    # quarterly.
+    #
+    # --- "unmaintained" advisories (informational, NOT vulnerabilities) ---
+    # These have no fixed version — the crate is simply no longer
+    # maintained. All are transitive; none is a security hole. Reviewed
+    # 2026-07-13. Actual CVEs still fail the build (this list is
+    # unmaintained-only).
+    #
+    # gtk-rs GTK3 bindings — pulled in transitively by `wry`/`tao` for
+    # the Linux WebKitGTK backend ONLY (absent on the Windows/macOS dep
+    # graph). Can't be dropped without an upstream migration to GTK4,
+    # which wry/tao don't yet offer. The Windows release build (our
+    # primary target) doesn't compile these at all.
+    "RUSTSEC-2024-0411", # gtk3
+    "RUSTSEC-2024-0412", # gdk
+    "RUSTSEC-2024-0413", # atk
+    "RUSTSEC-2024-0414", # gdkwayland-sys / gtk-rs family
+    "RUSTSEC-2024-0415", # gdkx11 / gtk-rs family
+    "RUSTSEC-2024-0416", # atk-sys
+    "RUSTSEC-2024-0417", # gdk-sys / gtk-rs family
+    "RUSTSEC-2024-0418", # gdk-sys / gtk-rs family
+    "RUSTSEC-2024-0419", # gtk-sys / gtk-rs family
+    "RUSTSEC-2024-0420", # gtk3-macros / gtk-rs family
+    # `fxhash` — unmaintained; transitive (our own code already uses the
+    # maintained successor `rustc-hash`). No direct dependency to swap.
+    "RUSTSEC-2025-0057", # fxhash
+    # `instant` — unmaintained WASM-time shim, transitive; not used on
+    # our native targets in a security-relevant path.
+    "RUSTSEC-2024-0384", # instant
+    # `proc-macro-error` — unmaintained build-time proc-macro helper,
+    # transitive; compile-time only, not shipped in the binary.
+    "RUSTSEC-2024-0370", # proc-macro-error
+]
+
+# ============================================================
+#  License policy
+# ============================================================
+[licenses]
+version = 2
+# Permissive licenses we accept without case-by-case review.
+# Anything NOT on this list requires either approval (added here
+# with rationale) OR the dep is replaced.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "Zlib",
+    "0BSD",
+    # MPL-2.0 permits inclusion under permissive licenses as long as
+    # we don't modify the file itself. Acceptable for pass-through.
+    "MPL-2.0",
+    # CDLA-Permissive-2.0: the Community Data License Agreement under
+    # which `webpki-roots` ships Mozilla's CA root-certificate DATA
+    # (pulled transitively by rustls/reqwest). Permissive, data-only,
+    # no copyleft on our code.
+    "CDLA-Permissive-2.0",
+]
+
+# Crates with complex license expressions get called out explicitly.
+# `confidence-threshold` makes cargo-deny surface ambiguous license
+# metadata instead of silently guessing.
+confidence-threshold = 0.93
+
+# Per-crate exceptions. xau-rs's OWN crates are GPL-3.0-or-later (set in
+# `[workspace.package] license`), which cargo-deny evaluates like any
+# other crate in the graph — so we must allow GPL-3.0-or-later for these
+# three first-party crates explicitly. We do NOT add GPL to the global
+# `allow` list: that keeps the policy strict for THIRD-PARTY deps (a
+# copyleft dependency should still trip the gate for review), while our
+# own code is obviously fine under our own license.
+exceptions = [
+    { allow = ["GPL-3.0-or-later"], crate = "xau-core" },
+    { allow = ["GPL-3.0-or-later"], crate = "xau-mobile" },
+    { allow = ["GPL-3.0-or-later"], crate = "xau-jni" },
+]
+
+# ============================================================
+#  Banned / Skipped crates
+# ============================================================
+[bans]
+# Deny multiple major versions of the same crate IF the duplicate is
+# actually a problem. `warn` is the pragmatic level — some duplicates
+# are unavoidable until upstream updates.
+multiple-versions = "warn"
+# Packages we genuinely don't want, ever.
+deny = [
+    # Known crypto mistakes / deprecated / shim crates go here.
+]
+# Duplicates we've already assessed as tolerable go here so the
+# signal doesn't drown in noise.
+skip = [
+    # Typical: minor-version skew between transitive deps of reqwest
+    # and axum. Add with a `# reason` comment.
+]
+skip-tree = []
+
+# ============================================================
+#  Source policy
+# ============================================================
+[sources]
+# Only crates.io and official Rust registries. No arbitrary git deps
+# without review.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

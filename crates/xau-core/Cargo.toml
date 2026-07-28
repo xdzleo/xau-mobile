@@ -1,0 +1,96 @@
+[package]
+name = "xau-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Core library for the Xbox Achievement Unlocker Rust port"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+simd-json.workspace = true
+thiserror.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+directories.workspace = true
+url.workspace = true
+zip.workspace = true
+# Rayon is used for:
+#   - Windows memory scanner (`memory/win.rs`) — SIMD + work-stealing for
+#     the XAUTH/XSTSToken needle scan
+#   - Plan builder's filter + sort phase (`plan/builder.rs`) — for
+#     SiegfriedX-sized profiles (~126k unlocked achievements) the
+#     single-threaded filter pass was a visible UI freeze. `par_iter`
+#     on the incoming page batches lets us pin every logical core.
+rayon.workspace = true
+# UI/perf wave: rustc-hash for FxHashMap/FxHashSet in scheduler hot
+# paths. See workspace-level doc on rustc-hash for the rationale.
+rustc-hash.workspace = true
+
+# OAuth + SISU signing. `p256` gives ECDSA P-256 (hashing handled inside its
+# `signature::Signer` impl via sha2 transitively); `base64` the URL-safe
+# encoder for JWK coordinates.
+p256 = { version = "0.13", features = ["ecdsa", "ecdsa-core", "pem"] }
+rand_core = { version = "0.6", features = ["std"] }
+base64 = "0.22"
+
+[target.'cfg(windows)'.dependencies]
+# Wave-7 audit dep-MED-4: enable reqwest's `native-tls` feature only
+# on Windows. The single endpoint that requires it
+# (`v20.events.data.microsoft.com` — TLS renegotiation mid-response,
+# refused by rustls) is Windows-only via the events-bundle path, so
+# non-Windows dev builds save the entire OpenSSL chain. Cargo merges
+# this additively with the workspace `reqwest.workspace = true` in
+# `[dependencies]` above; the merge is a no-op outside Windows.
+reqwest = { workspace = true, features = ["native-tls"] }
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_System_Memory",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+    "Win32_System_SystemServices",
+    "Win32_Security",
+    # DPAPI (CryptProtectData/CryptUnprotectData) for auth.json at rest.
+    "Win32_Security_Cryptography",
+] }
+# SIMD-accelerated Two-Way substring search for the XAUTH pattern — 5–10×
+# faster than the naive `haystack.windows().position()` scan the original
+# vendored memory.dll did. Matches the scanner in the sister project
+# `rewards_farming_rust` (which demonstrated the speedup empirically).
+memchr = "2"
+
+[dependencies.async-trait]
+# async-trait is used ONLY by the presence-keepalive abstraction in
+# `plan::bit_by_bit`. The trait lives in the public API (required so
+# the XboxClient tuple impl can satisfy it) — we pay the minor compile
+# cost in prod but nothing beyond a Vec<u8> marker is dynamically
+# allocated at runtime.
+version = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
+tempfile = "3"
+directories.workspace = true
+# Mock HTTP server for end-to-end scan diagnostics. `hyper` is already
+# pulled in transitively by reqwest; wiring a minimal server is cheap.
+axum.workspace = true
+# Property-based testing for pure-logic modules: scheduler, gap_mode,
+# estimate, types roundtrips, parse_retry_after, parse_imf_fixdate.
+# Invariants that hold for every input class catch bugs unit tests
+# (fixed-case) miss — e.g. off-by-one in scheduler monotonicity that
+# only fires when two entries share a timestamp.
+#
+# `std` feature off (we don't need the `std` error type from proptest
+# itself) and `fork` off (Windows doesn't support it; shrinker still
+# works in-process). Keeps dev-dep compile time < 10s.
+proptest = { version = "1", default-features = false, features = ["std"] }

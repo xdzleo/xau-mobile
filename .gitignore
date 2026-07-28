@@ -1,0 +1,27 @@
+/target
+/target-android
+/gen
+build-android.cmd
+/target-desktop
+/build-err.txt
+
+# Android
+android/local.properties
+android/.gradle/
+android/build/
+android/app/build/
+android/app/src/main/jniLibs/
+target-android/
+target-msvc/
+build-msvc.cmd
+android/keystore.properties
+android/*.jks
+*.jks
+*.keystore
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Claude Code local runtime state
+.claude/

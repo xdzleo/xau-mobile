@@ -1,0 +1,23 @@
+<!-- The Xbox sphere: a narrow wedge at top and bottom where the two
+     mirrored strokes meet, and two crossing bodies filling the circle.
+     Drawn as four solid shapes rather than strokes so it stays crisp at
+     the 20dp the header uses. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M15.1,4.6C17.7,3 20.8,2.1 24,2.1c3.2,0 6.3,0.9 8.9,2.5 -2.6,0.9 -6.1,3.6 -8.9,6.4 -2.8,-2.8 -6.3,-5.5 -8.9,-6.4Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M10.9,7.6C6.7,11.3 4,16.7 4,22.7c0,5.3 2.1,10.2 5.5,13.8 -1.6,-6.9 6.6,-19.6 12.6,-26.6 -3.4,-3.6 -8,-6.9 -11.2,-2.3Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M37.1,7.6c-3.2,-4.6 -7.8,-1.3 -11.2,2.3 6,7 14.2,19.7 12.6,26.6A19.9,19.9 0 0 0 44,22.7c0,-6 -2.7,-11.4 -6.9,-15.1Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M24,13.4c-6.4,7.2 -13.9,18.5 -12.4,24.1A19.9,19.9 0 0 0 24,42.1c4.7,0 9,-1.6 12.4,-4.6 1.5,-5.6 -6,-16.9 -12.4,-24.1Z" />
+</vector>

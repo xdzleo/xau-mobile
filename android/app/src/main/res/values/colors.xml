@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Mirrors XauPalette.ink. Only the launcher icon and the window
+         background read these; the app's colours live in Theme.kt. -->
+    <color name="ink">#FF0B0F0D</color>
+    <color name="brand">#FF107C10</color>
+</resources>

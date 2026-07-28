@@ -1,0 +1,21 @@
+[package]
+name = "xau-mobile"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Built as a shared library: Android loads it through the app's JNI/Tauri
+# shell, not as an executable.
+[lib]
+name = "xau_mobile"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+xau-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+# Only for the public-IP lookup; every Xbox call goes through xau-core.
+reqwest = { workspace = true }
