@@ -7,11 +7,19 @@
 //! # What each row can show, and what it cannot
 //!
 //! Gamertag, gamerpic and gamerscore all come from one profile call.
-//! **Email does not.** The token this app holds is scoped
-//! `service::user.auth.xboxlive.com::MBI_SSL`, which is Xbox Live only —
-//! the profile behind it has no address on it. Showing one would mean
-//! requesting a different scope at sign-in and risking the SISU exchange
-//! that scope exists for, so this reports what it actually knows.
+//!
+//! **Email comes from somewhere else entirely.** No Xbox Live endpoint
+//! carries it: the token is scoped
+//! `service::user.auth.xboxlive.com::MBI_SSL`, and widening that scope
+//! would change the token the SISU handshake is signed against — which
+//! is not a trade worth making for a display string. It is instead read
+//! from the sign-in itself, where the user types it into Microsoft's own
+//! page and it travels in the query string the login WebView is already
+//! walking. See `sniff_email` in the crate root.
+//!
+//! The consequence is that only accounts added on this device have one.
+//! A session restored from a stored token has no address, because nobody
+//! typed anything — and that is reported as absent rather than guessed.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -65,6 +73,10 @@ pub struct Store {
     /// account already present" has to replace rather than duplicate.
     #[serde(default)]
     pub tokens: BTreeMap<String, String>,
+    /// xuid -> the address seen at sign-in. Separate map so an existing
+    /// accounts.json without it still loads.
+    #[serde(default)]
+    pub emails: BTreeMap<String, String>,
 }
 
 fn store_path() -> Result<PathBuf> {
@@ -105,7 +117,17 @@ impl Store {
         self.tokens.insert(xuid.into(), xauth.into());
     }
 
+    pub fn put_email(&mut self, xuid: impl Into<String>, email: impl Into<String>) {
+        self.emails.insert(xuid.into(), email.into());
+    }
+
+    #[must_use]
+    pub fn email_of(&self, xuid: &str) -> Option<&str> {
+        self.emails.get(xuid).map(String::as_str)
+    }
+
     pub fn remove(&mut self, xuid: &str) -> bool {
+        self.emails.remove(xuid);
         self.tokens.remove(xuid).is_some()
     }
 

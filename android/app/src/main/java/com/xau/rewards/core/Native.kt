@@ -198,6 +198,8 @@ data class Account(
     val missionsDone: Int? = null,
     /** Game Pass tier as the service names it. Null = no membership. */
     val gamepass: String? = null,
+    /** Seen at sign-in. Null for accounts restored from an older store. */
+    val email: String? = null,
     val active: Boolean,
     /** Why this row's figures are missing, when they are. */
     val staleReason: String?,
@@ -256,6 +258,7 @@ private fun JSONArray.toAccounts(): List<Account> = map { o ->
         missionsOpen = if (o.isNull("missionsOpen")) null else o.getInt("missionsOpen"),
         missionsDone = if (o.isNull("missionsDone")) null else o.getInt("missionsDone"),
         gamepass = if (o.isNull("gamepass")) null else o.getString("gamepass"),
+        email = if (o.isNull("email")) null else o.getString("email"),
         active = o.optBoolean("active"),
         staleReason = if (o.isNull("staleReason")) null else o.getString("staleReason"),
     )

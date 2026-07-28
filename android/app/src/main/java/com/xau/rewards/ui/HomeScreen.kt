@@ -459,6 +459,16 @@ private fun AccountRow(
                         GamePassBadge(it)
                     }
                 }
+                account.email?.let {
+                    Spacer(Modifier.height(Space.xs))
+                    Text(
+                        it,
+                        style = Xau.type.caption,
+                        color = c.textMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 account.missionsOpen?.takeIf { it > 0 }?.let {
                     Spacer(Modifier.height(Space.xs))
                     Text(

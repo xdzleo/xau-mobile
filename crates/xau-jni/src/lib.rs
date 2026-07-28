@@ -100,6 +100,7 @@ fn active_xuid() -> Result<String> {
 /// account, and go back to null when one fails — a row must never show
 /// a figure it did not just fetch.
 fn account_json(xuid: &str, gamertag: &str, pic: &str, score: i64) -> Value {
+    let email = Store::load().email_of(xuid).map(str::to_string);
     let guard = state()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -117,6 +118,7 @@ fn account_json(xuid: &str, gamertag: &str, pic: &str, score: i64) -> Value {
         "farming": running,
         "active": guard.active.as_deref() == Some(xuid),
         "staleReason": guard.stale.get(xuid),
+        "email": email,
         "farmPercent": snap.as_ref().map(|s| s.percent),
         "farmCycle": snap.as_ref().map(|s| s.cycle),
         "farmElapsed": snap.as_ref().map(|s| s.cycle_elapsed_secs),
@@ -264,6 +266,11 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
             // "no accounts connected" as though sign-in had failed.
             let mut store = Store::load();
             store.put(&xuid, session.xauth());
+            // Only sign-in ever sees this; a restored session has no
+            // address, so it must be kept now or not at all.
+            if let Some(email) = session.email() {
+                store.put_email(&xuid, email);
+            }
             {
                 let mut guard = state()
                     .lock()

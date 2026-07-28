@@ -43,6 +43,7 @@ pub struct Session {
     xuid: String,
     gamertag: String,
     xauth: String,
+    email: Option<String>,
 }
 
 impl Session {
@@ -59,6 +60,13 @@ impl Session {
     #[must_use]
     pub fn xauth(&self) -> &str {
         &self.xauth
+    }
+
+    /// The address seen during sign-in, when there was one. Restored
+    /// sessions have none: nobody typed anything.
+    #[must_use]
+    pub fn email(&self) -> Option<&str> {
+        self.email.as_deref()
     }
 
     /// Avatar URL and gamerscore.
@@ -102,11 +110,83 @@ pub fn login_url() -> Result<String> {
 /// # Errors
 /// Returns the failure reason when sign-in was refused or cancelled.
 pub fn on_navigate(url: &str) -> Result<Option<String>> {
+    sniff_email(url);
     match classify_redirect(url) {
         RedirectOutcome::Pending => Ok(None),
         RedirectOutcome::Code(c) => Ok(Some(c)),
         RedirectOutcome::Failed(reason) => Err(Error::other(reason)),
     }
+}
+
+/// The address the user typed on Microsoft's page, if it went past.
+///
+/// The Xbox scope this app authenticates with returns no email and no
+/// id_token — deliberately, because widening it would change the token
+/// the SISU handshake is signed against. But the sign-in itself happens
+/// in a WebView whose every navigation is already classified here, and
+/// Microsoft carries the username in the query string between steps.
+/// So it is read from something already passing through, rather than by
+/// asking for more access.
+///
+/// **Only the address.** The password is never in a URL and is never
+/// looked for. This never leaves the device.
+static SEEN_EMAIL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Microsoft has used several names for it across flow revisions;
+/// accepting all of them costs nothing and avoids silently breaking
+/// when the login page is next reworked.
+const EMAIL_PARAMS: &[&str] = &["login_hint", "username", "login", "email", "loginfmt"];
+
+fn sniff_email(url: &str) {
+    let Some((_, query)) = url.split_once('?') else {
+        return;
+    };
+    for pair in query.split('&') {
+        let Some((k, v)) = pair.split_once('=') else {
+            continue;
+        };
+        if !EMAIL_PARAMS.iter().any(|p| k.eq_ignore_ascii_case(p)) {
+            continue;
+        }
+        let decoded = urldecode_min(v);
+        // A bare "@" test is enough: anything without one is not an
+        // address, and anything with one is what the user typed.
+        if decoded.contains('@') && decoded.len() <= 254 {
+            *SEEN_EMAIL
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(decoded);
+            return;
+        }
+    }
+}
+
+/// Take whatever the sign-in saw, clearing it so the next account does
+/// not inherit the previous one's address.
+fn take_seen_email() -> Option<String> {
+    SEEN_EMAIL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take()
+}
+
+fn urldecode_min(s: &str) -> String {
+    let bytes = s.replace('+', " ").into_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(b) =
+                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+            {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Trade the authorization code for a live session.
@@ -176,6 +256,7 @@ pub async fn session_from_token(xauth: String) -> Result<Session> {
         client,
         xuid,
         xauth,
+        email: take_seen_email(),
     })
 }
 

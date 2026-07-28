@@ -115,9 +115,11 @@ fun AccountDetail(account: Account, onBack: () -> Unit) {
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    "Nível ${account.level ?: "—"} · ${money(account.balance)} pontos",
+                    account.email ?: "Nível ${account.level ?: "—"} · ${money(account.balance)} pontos",
                     style = Xau.type.caption,
                     color = c.textSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
