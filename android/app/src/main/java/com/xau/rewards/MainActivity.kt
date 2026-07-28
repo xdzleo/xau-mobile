@@ -3,9 +3,23 @@ package com.xau.rewards
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Icon
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -47,7 +61,16 @@ class MainActivity : ComponentActivity() {
         // Called before setContent so the first frame already draws
         // under the bars — otherwise the layout visibly jumps once the
         // insets arrive.
-        enableEdgeToEdge()
+        //
+        // Both bars are pinned to a DARK style explicitly. The default
+        // follows the system theme, which on a phone set to light gave
+        // this dark app a white navigation bar across the bottom —
+        // visible only on a real device, because a JVM renderer resolves
+        // insets to zero and never draws the bars at all.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+        )
         super.onCreate(savedInstanceState)
 
         setContent {
@@ -124,28 +147,80 @@ class MainActivity : ComponentActivity() {
  */
 @Composable
 private fun Welcome(error: String?, onAdd: () -> Unit) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        // When a sign-in failed, this screen must say so. Without the
-        // error it is indistinguishable from never having tried — which
-        // is exactly what made a broken login look like nothing at all
-        // had happened.
-        if (error != null) {
-            StateBlock(
-                title = "Não foi possível conectar",
-                detail = error,
-                actionLabel = "Tentar de novo",
-                onAction = onAdd,
-                tone = Xau.colors.danger,
-            )
-        } else {
-            StateBlock(
-                title = "Nenhuma conta conectada",
-                detail = "Entre com a sua conta Microsoft para ver o saldo do Rewards, " +
-                    "resgatar os pontos pendentes e rodar o farm de presença.",
-                actionLabel = "Entrar",
-                onAction = onAdd,
+    val c = Xau.colors
+    Column(
+        Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .padding(horizontal = Space.xxl),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        // The first screen anyone sees said nothing about what this is:
+        // a small block of grey text floating in a black void, with the
+        // one action on it rendered as the quietest element present.
+        Box(
+            Modifier.size(88.dp).clip(RoundedCornerShape(Radius.pill)).background(Color.White),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                painterResource(R.drawable.ic_xbox),
+                contentDescription = null,
+                tint = c.greenDeep,
+                modifier = Modifier.size(60.dp),
             )
         }
+
+        Spacer(Modifier.height(Space.xxl))
+
+        Text(
+            buildAnnotatedString {
+                append("Xbox ")
+                withStyle(SpanStyle(color = c.green)) { append("Rewards") }
+            },
+            style = Xau.type.hero.copy(fontSize = Xau.type.brand.fontSize * 1.4f),
+            color = c.textPrimary,
+        )
+        Text("Jogos. Presença. Recompensas.", style = Xau.type.body, color = c.textSecondary)
+
+        Spacer(Modifier.height(Space.huge))
+
+        Text(
+            error ?: "Entre com a sua conta Microsoft para ver o saldo do Rewards, " +
+                "resgatar os pontos pendentes e rodar o farm de presença.",
+            style = Xau.type.body,
+            color = if (error != null) c.danger else c.textSecondary,
+            textAlign = TextAlign.Center,
+        )
+
+        Spacer(Modifier.height(Space.xxl))
+
+        // Filled, not outlined. This is the only thing the user can do
+        // on this screen; it has no business being the quietest mark on
+        // it.
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(Space.touch + 6.dp)
+                .clip(RoundedCornerShape(Radius.control))
+                .background(c.greenDeep)
+                .clickable(onClick = onAdd),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                if (error != null) "Tentar de novo" else "Entrar com a Microsoft",
+                style = Xau.type.rowTitle,
+                color = c.onGreen,
+            )
+        }
+
+        Spacer(Modifier.height(Space.lg))
+        Text(
+            "Nenhum dado sai deste aparelho além das chamadas à Xbox Live.",
+            style = Xau.type.caption,
+            color = c.textMuted,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 
