@@ -431,8 +431,8 @@ private fun OfferCodesScreen(g: OfferGroup, onBack: () -> Unit, onCopy: (String)
     // bubble, but nothing below it does, and a tap that appears to do
     // nothing reads as a broken button.
     var copied by remember(g.offerId) { mutableStateOf<Int?>(null) }
-    // What came of the last save.
-    var saved by remember(g.offerId) { mutableStateOf<String?>(null) }
+    // What the last action reported, shown where the count usually is.
+    var notice by remember(g.offerId) { mutableStateOf<String?>(null) }
     val context = LocalContext.current
 
     LaunchedEffect(g.offerId) {
@@ -467,8 +467,8 @@ private fun OfferCodesScreen(g: OfferGroup, onBack: () -> Unit, onCopy: (String)
                     } ?: error("o sistema não abriu o arquivo")
                 }
             }
-                .onSuccess { saved = "CSV salvo" }
-                .onFailure { saved = "não deu para salvar: ${it.message}" }
+                .onSuccess { notice = "CSV salvo" }
+                .onFailure { notice = "não deu para salvar: ${it.message}" }
         }
     }
 
@@ -497,44 +497,53 @@ private fun OfferCodesScreen(g: OfferGroup, onBack: () -> Unit, onCopy: (String)
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    saved
+                    notice
                         ?: rows?.let {
                             plural(it.size, "1 código salvo", "${it.size} códigos salvos")
                         }
                         ?: "lendo o CSV…",
                     style = Xau.type.caption,
-                    color = if (saved != null) c.green else c.textSecondary,
+                    color = if (notice != null) c.green else c.textSecondary,
                 )
             }
-            // Only offered once there is something in the file. An empty
-            // download is a worse answer than no button.
-            if (!rows.isNullOrEmpty()) {
-                Spacer(Modifier.width(Space.sm))
-                Box(
-                    Modifier
-                        .height(Space.touch)
-                        .clip(RoundedCornerShape(Radius.control))
-                        .background(c.surfaceHigh)
-                        .clickable {
-                            scope.launch {
-                                saved = null
-                                // Only the name is needed now — the
-                                // contents are read when the file is
-                                // actually written. `launch` itself can
-                                // throw on a ROM with no document
-                                // picker, which would take the app down
-                                // from inside a click.
-                                runCatching {
-                                    save.launch(Api.offerCsv(g.offerId, g.title).fileName)
-                                }.onFailure {
-                                    saved = "este aparelho não tem onde salvar arquivos"
-                                }
-                            }
+        }
+
+        // Both actions, side by side and equal. Neither fits beside a
+        // reward title on a 720px screen, and neither is the lesser one:
+        // copying is for using the codes now, the file is for keeping
+        // them. Offered only once there is something to act on — an
+        // empty download is a worse answer than no button.
+        val list = rows.orEmpty().map { it.code }.filter { it.isNotBlank() }
+        if (list.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = Space.gutter),
+                horizontalArrangement = Arrangement.spacedBy(Space.sm),
+            ) {
+                Action("Copiar tudo (${list.size})", Modifier.weight(1f)) {
+                    // One code per line: the shape you can paste into a
+                    // notes app and work down, and the shape a browser
+                    // takes one line at a time.
+                    onCopy(list.joinToString("\n"))
+                    copied = null
+                    notice = plural(list.size, "1 código copiado", "${list.size} códigos copiados")
+                }
+                Action("Baixar CSV", Modifier.weight(1f)) {
+                    scope.launch {
+                        notice = null
+                        // Only the name is needed now — the contents are
+                        // read when the file is actually written.
+                        // `launch` itself can throw on a ROM with no
+                        // document picker, which would take the app down
+                        // from inside a click.
+                        runCatching {
+                            save.launch(Api.offerCsv(g.offerId, g.title).fileName)
+                        }.onFailure {
+                            notice = "este aparelho não tem onde salvar arquivos"
                         }
-                        .padding(horizontal = Space.lg),
-                    contentAlignment = Alignment.Center,
-                ) { Text("Baixar CSV", style = Xau.type.button, color = c.textPrimary) }
+                    }
+                }
             }
+            Spacer(Modifier.height(Space.md))
         }
 
         when {
@@ -576,6 +585,28 @@ private fun OfferCodesScreen(g: OfferGroup, onBack: () -> Unit, onCopy: (String)
                 }
             }
         }
+    }
+}
+
+/** One of the screen's two actions. Same weight, same shape. */
+@Composable
+private fun Action(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val c = Xau.colors
+    Box(
+        modifier
+            .height(Space.touch)
+            .clip(RoundedCornerShape(Radius.control))
+            .background(c.surfaceHigh)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            style = Xau.type.button,
+            color = c.textPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
