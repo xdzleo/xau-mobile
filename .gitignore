@@ -28,3 +28,4 @@ __pycache__/
 
 # Screenshot captures from the review loop
 shots/
+android/app/src/test/snapshots/

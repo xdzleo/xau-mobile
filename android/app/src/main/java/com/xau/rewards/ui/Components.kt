@@ -240,8 +240,11 @@ fun PrimaryButton(
     busy: Boolean = false,
 ) {
     val c = Xau.colors
-    val bg = if (enabled && !busy) c.brand else c.surfaceHigh
-    val fg = if (enabled && !busy) Color.White else c.textMuted
+    val bg = if (enabled && !busy) c.volt else c.slabHigh
+    // NEVER white on volt: that pairing measures about 1.3:1. Dark type
+    // on a light field is the whole point — it is what makes a claim
+    // read as signage rather than as neon, and it measures 15.09:1.
+    val fg = if (enabled && !busy) c.onVolt else c.muted
 
     Box(
         modifier

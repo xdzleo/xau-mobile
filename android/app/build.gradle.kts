@@ -4,6 +4,7 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("app.cash.paparazzi")
 }
 
 // Signing details live outside the repo (see .gitignore). Absent on a
@@ -162,4 +163,15 @@ dependencies {
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     implementation("androidx.compose.ui:ui-tooling-preview")
+
+    testImplementation(composeBom)
+    testImplementation("junit:junit:4.13.2")
+}
+
+// Heap is capped because this machine is commit-limited; the attach
+// flags are what byte-buddy needs under JDK 21.
+tasks.withType<Test>().configureEach {
+    jvmArgs("-Djdk.attach.allowAttachSelf=true", "-XX:+EnableDynamicAgentLoading")
+    maxHeapSize = "1024m"
+    maxParallelForks = 1
 }
