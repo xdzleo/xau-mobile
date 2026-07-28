@@ -126,7 +126,9 @@ fn account_json(xuid: &str, gamertag: &str, pic: &str, score: i64) -> Value {
 }
 
 /// Describe every live session, merging in the balances held per xuid.
-async fn snapshot(balances: &HashMap<String, (i64, i64, Option<i64>)>) -> Value {
+type Balances = HashMap<String, (i64, i64, Option<i64>, usize, usize)>;
+
+async fn snapshot(balances: &Balances) -> Value {
     let sessions: Vec<Arc<Session>> = {
         let guard = state()
             .lock()
@@ -138,10 +140,12 @@ async fn snapshot(balances: &HashMap<String, (i64, i64, Option<i64>)>) -> Value 
     for s in sessions {
         let (pic, score) = s.profile_display().await.unwrap_or_default();
         let mut row = account_json(s.xuid(), s.gamertag(), &pic, score);
-        if let Some((balance, unclaimed, level)) = balances.get(s.xuid()) {
+        if let Some((balance, unclaimed, level, open, done)) = balances.get(s.xuid()) {
             row["balance"] = json!(balance);
             row["unclaimed"] = json!(unclaimed);
             row["level"] = json!(level);
+            row["missionsOpen"] = json!(open);
+            row["missionsDone"] = json!(done);
         }
         out.push(row);
     }
@@ -178,7 +182,7 @@ async fn restore_all() -> Value {
             guard.active = guard.sessions.keys().next().cloned();
         }
     }
-    snapshot(&HashMap::new()).await
+    snapshot(&Balances::new()).await
 }
 
 /// Read Rewards for every account, and clear the figures of any that
@@ -191,7 +195,7 @@ async fn refresh_all() -> Value {
         guard.sessions.values().cloned().collect()
     };
 
-    let mut balances = HashMap::new();
+    let mut balances = Balances::new();
     let mut stale = HashMap::new();
     for s in sessions {
         // Serial on purpose: these are the same Rewards endpoint under
@@ -201,7 +205,13 @@ async fn refresh_all() -> Value {
             Ok(info) => {
                 balances.insert(
                     s.xuid().to_string(),
-                    (info.balance, info.unclaimed, info.level),
+                    (
+                        info.balance,
+                        info.unclaimed,
+                        info.level,
+                        info.missions.iter().filter(|m| m.is_open()).count(),
+                        info.missions.iter().filter(|m| m.is_done()).count(),
+                    ),
                 );
             }
             Err(e) => {
@@ -296,7 +306,7 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
                     guard.active = guard.sessions.keys().next().cloned();
                 }
             }
-            Ok(snapshot(&HashMap::new()).await)
+            Ok(snapshot(&Balances::new()).await)
         }
 
         // ---- accounts ----
@@ -313,6 +323,35 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
             }
             guard.active = Some(xuid);
             Ok(json!({ "ok": true }))
+        }
+
+        // One account's full mission list, for its detail screen. Read
+        // live rather than cached: the screen exists to answer "what is
+        // actually left", and a stale answer there is worse than a wait.
+        "missions" => {
+            let xuid = if arg("xuid").is_empty() {
+                active_xuid()?
+            } else {
+                arg("xuid")
+            };
+            let s = session_of(&xuid)?;
+            let info = xau_mobile::rewards(&s).await?;
+            Ok(Value::Array(
+                info.missions
+                    .iter()
+                    .map(|m| {
+                        json!({
+                            "id": m.activity_id,
+                            "title": m.title,
+                            "points": m.points,
+                            "label": m.label,
+                            "progress": m.progress,
+                            "done": m.is_done(),
+                            "open": m.is_open(),
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            ))
         }
 
         // ---- rewards ----

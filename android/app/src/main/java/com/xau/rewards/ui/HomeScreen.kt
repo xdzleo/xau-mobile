@@ -76,6 +76,7 @@ fun HomeScreen(
     onSignOut: (String) -> Unit,
     onAddAccount: () -> Unit,
     onToggleFarm: (String) -> Unit,
+    onOpenAccount: (Account) -> Unit = {},
     onRetry: () -> Unit = {},
 ) {
     val c = Xau.colors
@@ -125,7 +126,7 @@ fun HomeScreen(
                     AccountRow(
                         account = a,
                         claiming = state.claimingXuid == a.xuid,
-                        onSelect = { onSelect(a.xuid) },
+                        onSelect = { onSelect(a.xuid); onOpenAccount(a) },
                         onLongPress = { pendingRemoval = a },
                         onToggleFarm = { onToggleFarm(a.xuid) },
                         onClaim = { onClaim(a.xuid) },
@@ -442,7 +443,19 @@ private fun AccountRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.height(Space.xs))
-                LevelBadge(account.level, stale)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    LevelBadge(account.level, stale)
+                    account.missionsOpen?.takeIf { it > 0 }?.let {
+                        Spacer(Modifier.width(Space.sm))
+                        Text(
+                            "$it pendentes",
+                            style = Xau.type.caption,
+                            color = c.textSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
             }
 
             Column(horizontalAlignment = Alignment.End) {

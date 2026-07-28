@@ -47,6 +47,41 @@ pub struct RewardsInfo {
     /// Membership level 1-3. `None` when the payload did not carry
     /// one; that is not the same as level 1.
     pub level: Option<i64>,
+    /// Every activity the account can see, done or not.
+    pub missions: Vec<Mission>,
+}
+
+/// One Rewards activity, whatever state it is in.
+///
+/// `progress` is the service's own 0-100 figure. It is the reason this
+/// exists: the app previously estimated mission progress from its own
+/// farm clock, which is a guess about how long a mission takes, while
+/// this is the answer.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Mission {
+    pub activity_id: String,
+    pub title: String,
+    pub points: i64,
+    /// `active`, `claimed`, `completed`, `locked`, …
+    pub status: String,
+    /// Human-facing label the service supplies: Available, Claimed, …
+    pub label: String,
+    pub progress: i64,
+}
+
+impl Mission {
+    /// Nothing more to earn here: finished and settled.
+    #[must_use]
+    pub fn is_done(&self) -> bool {
+        self.status.eq_ignore_ascii_case("claimed") || self.progress >= 100
+    }
+
+    /// Available to work on now — not done, and not locked behind
+    /// something the user has not reached.
+    #[must_use]
+    pub fn is_open(&self) -> bool {
+        !self.is_done() && !self.status.eq_ignore_ascii_case("locked")
+    }
 }
 
 /// One claimable activity ("Play a game on console", a daily quest, …).
@@ -140,7 +175,6 @@ impl XboxClient {
             c::header_values::CONTRACT_VERSION_5,
         )])?;
         let raw: serde_json::Value = self.request_json(Method::GET, &url, headers, None).await?;
-        log_activity_shape(&raw);
         Ok(parse_program_info(&raw))
     }
 
@@ -224,57 +258,53 @@ impl XboxClient {
 /// `locked` means unavailable, and only **`completed`/`Unclaimed`** is
 /// claimable right now. Treating `active` as claimable would list every
 /// quest the user has not done yet as if points were waiting.
-/// Report the shape of every activity the payload carries.
+/// Rewards membership level, 1-3.
 ///
-/// Answers one question: can the app tell that today's
-/// play-8-titles-for-15-minutes mission is ALREADY satisfied, so it does
-/// not farm for points that are not on offer? Logs each activity's name
-/// and status fields only -- never the whole payload, which carries the
-/// account's balances and history.
-fn log_activity_shape(v: &serde_json::Value) {
-    fn walk(v: &serde_json::Value, out: &mut Vec<String>, depth: usize) {
-        if depth > 8 || out.len() > 30 {
-            return;
-        }
-        match v {
-            serde_json::Value::Object(map) => {
-                if map.contains_key("activityId") {
-                    let pick = |k: &str| {
-                        map.get(k)
-                            .map(|x| match x {
-                                serde_json::Value::String(s) => s.clone(),
-                                other => other.to_string(),
-                            })
-                            .unwrap_or_else(|| "-".into())
-                    };
-                    out.push(format!(
-                        "name={} status={} label={} max={} progress={} points={}",
-                        pick("name"),
-                        pick("status"),
-                        pick("statusLabel"),
-                        pick("maxCompletions"),
-                        pick("progress"),
-                        pick("points"),
-                    ));
-                }
-                for val in map.values() {
-                    walk(val, out, depth + 1);
-                }
-            }
-            serde_json::Value::Array(items) => {
-                for it in items {
-                    walk(it, out, depth + 1);
-                }
-            }
-            _ => {}
-        }
-    }
-    let mut found = Vec::new();
-    walk(v, &mut found, 0);
-    tracing::info!(count = found.len(), "rewards activity probe");
-    for line in found {
-        tracing::info!("  {line}");
-    }
+/// Read from a real `programInfo` response, not guessed:
+///
+/// ```jsonc
+/// "profile":      { "attributes": { "level": "newLevel1" } },  // a STRING
+/// "tiersProfile": { "programs": [ { "currentTierIndex": 0 } ] } // 0-BASED
+/// ```
+///
+/// `currentTierIndex` is authoritative and zero-based, so the level is
+/// index + 1. Confirmed against two live accounts: one without Game
+/// Pass reads 1, another reads 2, matching the Rewards app.
+///
+/// **`None` is a real answer.** An account that has not levelled up and
+/// an account whose level could not be read are different facts.
+fn find_level(v: &serde_json::Value) -> Option<i64> {
+    let by_index = v
+        .get("tiersProfile")
+        .and_then(|t| t.get("programs"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|programs| {
+            programs.iter().find_map(|p| {
+                p.get("currentTierIndex")
+                    .and_then(serde_json::Value::as_i64)
+            })
+        })
+        .map(|i| i + 1);
+
+    // Fallback: "newLevel1" -> 1, taking the trailing digits.
+    let by_name = v
+        .get("profile")
+        .and_then(|p| p.get("attributes"))
+        .and_then(|a| a.get("level"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(|s| {
+            let digits: String = s
+                .chars()
+                .rev()
+                .take_while(char::is_ascii_digit)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            digits.parse::<i64>().ok()
+        });
+
+    by_index.or(by_name).filter(|n| (1..=3).contains(n))
 }
 
 fn parse_program_info(v: &serde_json::Value) -> RewardsInfo {
@@ -297,6 +327,8 @@ fn parse_program_info(v: &serde_json::Value) -> RewardsInfo {
 
     let mut pending = Vec::new();
     collect_pending(v, &mut pending);
+    let mut missions = Vec::new();
+    collect_missions(v, &mut missions);
 
     RewardsInfo {
         balance,
@@ -304,70 +336,56 @@ fn parse_program_info(v: &serde_json::Value) -> RewardsInfo {
         pending,
         program,
         level,
+        missions,
     }
 }
 
-/// Rewards membership level, 1-3.
+/// Walk the payload for EVERY activity, in any state.
 ///
-/// Read from a real `programInfo` response, not guessed:
-///
-/// ```jsonc
-/// "profile":      { "attributes": { "level": "newLevel1" } },  // a STRING
-/// "tiersProfile": { "programs": [ { "allTiers": [ /* 3 */ ],
-///                                   "currentTierIndex": 0 } ] } // 0-BASED
-/// ```
-///
-/// `currentTierIndex` is authoritative and zero-based, so the level is
-/// index + 1. The `level` string is the fallback: it reads `newLevel1`,
-/// `newLevel2`, … and the trailing digit is the level.
-///
-/// **`None` is a real answer.** An account that has not levelled up and
-/// an account whose level could not be read are different facts, and
-/// defaulting to 1 would erase the difference in the direction that
-/// looks plausible.
-fn find_level(v: &serde_json::Value) -> Option<i64> {
-    // Authoritative: the tier the service says the account is currently on.
-    let by_index = v
-        .get("tiersProfile")
-        .and_then(|t| t.get("programs"))
-        .and_then(serde_json::Value::as_array)
-        .and_then(|programs| {
-            programs.iter().find_map(|p| {
-                p.get("currentTierIndex")
-                    .and_then(serde_json::Value::as_i64)
-            })
-        })
-        .map(|i| i + 1);
-
-    // Fallback: "newLevel1" -> 1. Take the LAST run of digits, so a name
-    // that happens to contain a number earlier cannot win.
-    let by_name = v
-        .get("profile")
-        .and_then(|p| p.get("attributes"))
-        .and_then(|a| a.get("level"))
-        .and_then(serde_json::Value::as_str)
-        .and_then(|s| {
-            let digits: String = s
-                .chars()
-                .rev()
-                .take_while(char::is_ascii_digit)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect();
-            digits.parse::<i64>().ok()
-        });
-
-    by_index.or(by_name).filter(|n| (1..=3).contains(n))
+/// Same recursive shape as [`collect_pending`] and for the same reason:
+/// the offerings array mixes container kinds and its nesting carries no
+/// documented guarantee, so a positional walk would silently return
+/// nothing the next time the layout moves.
+fn collect_missions(v: &serde_json::Value, out: &mut Vec<Mission>) {
+    match v {
+        serde_json::Value::Object(map) => {
+            if map.contains_key("activityId") {
+                let s = |k: &str| {
+                    map.get(k)
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string()
+                };
+                out.push(Mission {
+                    activity_id: s("activityId"),
+                    title: s("title"),
+                    points: map
+                        .get("rewardsPoints")
+                        .or_else(|| map.get("totalPoints"))
+                        .or_else(|| map.get("maximumBasePoints"))
+                        .and_then(serde_json::Value::as_i64)
+                        .unwrap_or(0),
+                    status: s("status"),
+                    label: s("statusLabel"),
+                    progress: map
+                        .get("progress")
+                        .and_then(serde_json::Value::as_i64)
+                        .unwrap_or(0),
+                });
+            }
+            for val in map.values() {
+                collect_missions(val, out);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for it in items {
+                collect_missions(it, out);
+            }
+        }
+        _ => {}
+    }
 }
 
-/// Walk the payload for activities that are finished but not yet claimed.
-///
-/// Recursive rather than indexing `programOfferings[..].activities`
-/// directly: the offerings array mixes container kinds (redeemables,
-/// quest channels, spotlights) and its nesting has no documented
-/// guarantee, so a positional walk would break on the next layout change
-/// and silently report nothing pending.
 fn collect_pending(v: &serde_json::Value, out: &mut Vec<PendingActivity>) {
     match v {
         serde_json::Value::Object(map) => {

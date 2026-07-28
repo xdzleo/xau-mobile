@@ -153,6 +153,20 @@ object Api {
         )
     }
 
+    /** One account's full mission list, read live. */
+    suspend fun missions(xuid: String): List<Mission> =
+        arr("missions", JSONObject().put("xuid", xuid)).map {
+            Mission(
+                id = it.getString("id"),
+                title = it.optString("title"),
+                points = it.optLong("points"),
+                label = it.optString("label"),
+                progress = it.optInt("progress"),
+                done = it.optBoolean("done"),
+                open = it.optBoolean("open"),
+            )
+        }
+
     // ------------------------------------------------------------ misc
 
     suspend fun publicIp(): String = obj("public_ip").getString("ip")
@@ -179,6 +193,9 @@ data class Account(
     val farmPercent: Float? = null,
     val farmElapsed: Long? = null,
     val farmTotal: Long? = null,
+    /** How many activities are still earnable / already settled. */
+    val missionsOpen: Int? = null,
+    val missionsDone: Int? = null,
     val active: Boolean,
     /** Why this row's figures are missing, when they are. */
     val staleReason: String?,
@@ -187,6 +204,18 @@ data class Account(
 data class ClaimOutcome(val pointsAdded: Long, val accounts: List<Account>)
 
 data class LoginOutcome(val accounts: List<Account>, val warning: String?)
+
+data class Mission(
+    val id: String,
+    val title: String,
+    val points: Long,
+    /** The service's own wording: Available, Claimed, Locked, … */
+    val label: String,
+    /** The service's own 0-100 figure, not an estimate of ours. */
+    val progress: Int,
+    val done: Boolean,
+    val open: Boolean,
+)
 
 data class FarmTitle(val titleId: String, val name: String)
 
@@ -222,6 +251,8 @@ private fun JSONArray.toAccounts(): List<Account> = map { o ->
         farmPercent = if (o.isNull("farmPercent")) null else o.getDouble("farmPercent").toFloat(),
         farmElapsed = if (o.isNull("farmElapsed")) null else o.getLong("farmElapsed"),
         farmTotal = if (o.isNull("farmTotal")) null else o.getLong("farmTotal"),
+        missionsOpen = if (o.isNull("missionsOpen")) null else o.getInt("missionsOpen"),
+        missionsDone = if (o.isNull("missionsDone")) null else o.getInt("missionsDone"),
         active = o.optBoolean("active"),
         staleReason = if (o.isNull("staleReason")) null else o.getString("staleReason"),
     )

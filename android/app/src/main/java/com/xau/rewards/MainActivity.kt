@@ -43,6 +43,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.lifecycleScope
 import com.xau.rewards.core.Api
+import com.xau.rewards.ui.AccountDetail
 import com.xau.rewards.ui.HomeScreen
 import com.xau.rewards.ui.LoginScreen
 import com.xau.rewards.ui.StateBlock
@@ -77,6 +78,7 @@ class MainActivity : ComponentActivity() {
             XauTheme {
                 val state by vm.state.collectAsStateWithLifecycle()
                 var loggingIn by remember { mutableStateOf(false) }
+                var openAccount by remember { mutableStateOf<String?>(null) }
 
                 // Polling only while the screen is actually in front of
                 // the user; a background poll costs battery to refresh
@@ -119,6 +121,12 @@ class MainActivity : ComponentActivity() {
                             },
                         )
 
+                        openAccount != null && state.accounts.any { it.xuid == openAccount } ->
+                            AccountDetail(
+                                account = state.accounts.first { it.xuid == openAccount },
+                                onBack = { openAccount = null },
+                            )
+
                         !state.booting && !state.signedIn ->
                             Welcome(error = state.fatal) { loggingIn = true }
 
@@ -129,6 +137,8 @@ class MainActivity : ComponentActivity() {
                             onSignOut = vm::signOut,
                             onAddAccount = { loggingIn = true },
                             onToggleFarm = vm::toggleFarm,
+                            onOpenAccount = { openAccount = it.xuid },
+                            onRetry = { vm.refresh() },
                         )
                     }
 
