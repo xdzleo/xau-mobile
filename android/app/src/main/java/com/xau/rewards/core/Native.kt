@@ -175,6 +175,10 @@ data class Account(
      */
     val level: Long? = null,
     val farming: Boolean,
+    /** Cycle progress 0-100 for THIS account's farm, when it has one. */
+    val farmPercent: Float? = null,
+    val farmElapsed: Long? = null,
+    val farmTotal: Long? = null,
     val active: Boolean,
     /** Why this row's figures are missing, when they are. */
     val staleReason: String?,
@@ -215,6 +219,9 @@ private fun JSONArray.toAccounts(): List<Account> = map { o ->
         unclaimed = if (o.isNull("unclaimed")) null else o.getLong("unclaimed"),
         level = if (o.isNull("level")) null else o.getLong("level"),
         farming = o.optBoolean("farming"),
+        farmPercent = if (o.isNull("farmPercent")) null else o.getDouble("farmPercent").toFloat(),
+        farmElapsed = if (o.isNull("farmElapsed")) null else o.getLong("farmElapsed"),
+        farmTotal = if (o.isNull("farmTotal")) null else o.getLong("farmTotal"),
         active = o.optBoolean("active"),
         staleReason = if (o.isNull("staleReason")) null else o.getString("staleReason"),
     )

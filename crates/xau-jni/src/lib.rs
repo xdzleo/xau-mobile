@@ -103,14 +103,25 @@ fn account_json(xuid: &str, gamertag: &str, pic: &str, score: i64) -> Value {
     let guard = state()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let farm = guard.farms.get(xuid);
+    let running = farm.is_some_and(FarmHandle::is_running);
+    // The row draws its own progress bar, so the cycle it is drawing has
+    // to belong to that account rather than to whichever one happens to
+    // be selected.
+    let snap = farm.map(FarmHandle::snapshot);
     json!({
         "xuid": xuid,
         "gamertag": gamertag,
         "gamerpic": pic,
         "gamerscore": score,
-        "farming": guard.farms.get(xuid).is_some_and(FarmHandle::is_running),
+        "farming": running,
         "active": guard.active.as_deref() == Some(xuid),
         "staleReason": guard.stale.get(xuid),
+        "farmPercent": snap.as_ref().map(|s| s.percent),
+        "farmCycle": snap.as_ref().map(|s| s.cycle),
+        "farmElapsed": snap.as_ref().map(|s| s.cycle_elapsed_secs),
+        "farmTotal": snap.as_ref().map(|s| s.cycle_total_secs),
+        "farmState": snap.as_ref().map(|s| format!("{:?}", s.state)),
     })
 }
 
@@ -456,16 +467,17 @@ pub extern "system" fn Java_com_xau_rewards_core_Native_init(
 ) {
     #[cfg(target_os = "android")]
     {
-        use tracing_subscriber::layer::SubscriberExt as _;
-        use tracing_subscriber::util::SubscriberInitExt as _;
+        // android_logger consumes `log` records. `tracing`'s "log"
+        // feature re-emits every tracing event as one — but ONLY while
+        // no tracing subscriber is installed. Installing a
+        // tracing_subscriber registry here (which had no output layer
+        // and so printed nothing itself) silently switched that bridge
+        // off, and the app traced into a void.
         android_logger::init_once(
             android_logger::Config::default()
                 .with_max_level(log::LevelFilter::Info)
                 .with_tag("xau"),
         );
-        let _ = tracing_subscriber::registry()
-            .with(tracing_subscriber::EnvFilter::new("info"))
-            .try_init();
     }
 
     // Read it unconditionally so the host contract is the same on every

@@ -253,43 +253,58 @@ fn parse_program_info(v: &serde_json::Value) -> RewardsInfo {
     }
 }
 
-/// Rewards membership level (1, 2 or 3), when the payload carries one.
+/// Rewards membership level, 1-3.
 ///
-/// The exact key has not been confirmed against a live response yet, so
-/// this checks the places it plausibly lives rather than committing to
-/// one. **`None` is a real answer** — a caller must render "unknown"
-/// rather than defaulting to 1, because "this account has not levelled
-/// up" and "we could not read the level" are different facts and the
-/// whole point of showing it is to tell them apart.
+/// Read from a real `programInfo` response, not guessed:
+///
+/// ```jsonc
+/// "profile":      { "attributes": { "level": "newLevel1" } },  // a STRING
+/// "tiersProfile": { "programs": [ { "allTiers": [ /* 3 */ ],
+///                                   "currentTierIndex": 0 } ] } // 0-BASED
+/// ```
+///
+/// `currentTierIndex` is authoritative and zero-based, so the level is
+/// index + 1. The `level` string is the fallback: it reads `newLevel1`,
+/// `newLevel2`, … and the trailing digit is the level.
+///
+/// **`None` is a real answer.** An account that has not levelled up and
+/// an account whose level could not be read are different facts, and
+/// defaulting to 1 would erase the difference in the direction that
+/// looks plausible.
 fn find_level(v: &serde_json::Value) -> Option<i64> {
-    let as_level = |x: Option<&serde_json::Value>| -> Option<i64> {
-        let x = x?;
-        x.as_i64()
-            // Some Rewards fields carry the level as a string, and at
-            // least one as "Level2".
-            .or_else(|| x.as_str().and_then(|s| s.trim().parse().ok()))
-            .or_else(|| {
-                x.as_str().and_then(|s| {
-                    s.trim_start_matches(|c: char| !c.is_ascii_digit())
-                        .parse()
-                        .ok()
-                })
+    // Authoritative: the tier the service says the account is currently on.
+    let by_index = v
+        .get("tiersProfile")
+        .and_then(|t| t.get("programs"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|programs| {
+            programs.iter().find_map(|p| {
+                p.get("currentTierIndex")
+                    .and_then(serde_json::Value::as_i64)
             })
-            .filter(|n| (1..=3).contains(n))
-    };
-
-    let attrs = v.get("profile").and_then(|p| p.get("attributes"));
-    as_level(v.get("level"))
-        .or_else(|| as_level(attrs.and_then(|a| a.get("level"))))
-        .or_else(|| as_level(attrs.and_then(|a| a.get("levelNumber"))))
-        .or_else(|| as_level(attrs.and_then(|a| a.get("membershipLevel"))))
-        .or_else(|| {
-            as_level(
-                v.get("tiersProfile")
-                    .and_then(|t| t.get("currentTier"))
-                    .and_then(|t| t.get("level")),
-            )
         })
+        .map(|i| i + 1);
+
+    // Fallback: "newLevel1" -> 1. Take the LAST run of digits, so a name
+    // that happens to contain a number earlier cannot win.
+    let by_name = v
+        .get("profile")
+        .and_then(|p| p.get("attributes"))
+        .and_then(|a| a.get("level"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(|s| {
+            let digits: String = s
+                .chars()
+                .rev()
+                .take_while(char::is_ascii_digit)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            digits.parse::<i64>().ok()
+        });
+
+    by_index.or(by_name).filter(|n| (1..=3).contains(n))
 }
 
 /// Walk the payload for activities that are finished but not yet claimed.

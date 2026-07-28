@@ -105,7 +105,7 @@ fun HomeScreen(
                 SectionHead(
                     icon = R.drawable.ic_people,
                     title = "Contas gerenciadas",
-                    subtitle = "Ligue o farm em cada conta",
+                    subtitle = "Ligue para upar cada conta",
                     actionLabel = "Atualizar",
                     actionIcon = R.drawable.ic_refresh,
                     onAction = onRetry,
@@ -470,6 +470,15 @@ private fun AccountRow(
             )
         }
 
+        // The mission is "play 8 titles for 15 minutes"; the farm
+        // broadcasts all eight at once, so one cycle IS the mission and
+        // its progress is the mission's progress. The bar lives inside
+        // the account banner because the farm is per account.
+        if (account.farming) {
+            Spacer(Modifier.height(Space.md))
+            MissionProgress(account)
+        }
+
         if (stale) {
             Spacer(Modifier.height(Space.sm))
             Text(
@@ -608,6 +617,52 @@ private fun TabBar() {
                     color = if (selected) c.green else c.textMuted,
                 )
             }
+        }
+    }
+}
+
+/**
+ * How far this account is through the 8-titles-for-15-minutes mission.
+ *
+ * When it completes the points appear as unclaimed and the auto-claim in
+ * AppViewModel settles them without a tap — so the bar filling is the
+ * whole interaction, and there is nothing for the user to do at the end.
+ */
+@Composable
+private fun MissionProgress(account: Account) {
+    val c = Xau.colors
+    val pct = ((account.farmPercent ?: 0f) / 100f).coerceIn(0f, 1f)
+    val elapsed = (account.farmElapsed ?: 0L) / 60
+    val total = ((account.farmTotal ?: 900L) / 60).coerceAtLeast(1L)
+
+    Column {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(6.dp)
+                .clip(RoundedCornerShape(Radius.pill))
+                .background(c.surfaceHigh),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth(pct)
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(Radius.pill))
+                    .background(c.green),
+            )
+        }
+        Spacer(Modifier.height(Space.sm))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(
+                "8 jogos · missão de 15 min",
+                style = Xau.type.caption,
+                color = c.textMuted,
+            )
+            Text(
+                "$elapsed de $total min",
+                style = Xau.type.caption,
+                color = c.textSecondary,
+            )
         }
     }
 }
