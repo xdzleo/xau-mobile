@@ -77,6 +77,7 @@ fun HomeScreen(
     onAddAccount: () -> Unit,
     onToggleFarm: (String) -> Unit,
     onOpenAccount: (Account) -> Unit = {},
+    onOpenOffers: () -> Unit = {},
     onRetry: () -> Unit = {},
 ) {
     val c = Xau.colors
@@ -136,7 +137,7 @@ fun HomeScreen(
             }
         }
 
-        TabBar()
+        TabBar(onOpenOffers)
     }
 }
 
@@ -656,13 +657,15 @@ private fun AddAccountRow(onClick: () -> Unit) {
 // -------------------------------------------------------------- tabbar
 
 @Composable
-private fun TabBar() {
+private fun TabBar(onOpenOffers: () -> Unit) {
     val c = Xau.colors
+    // Only the first two lead anywhere; the rest are drawn but inert,
+    // and are marked as such rather than pretending to work.
     val tabs = listOf(
-        R.drawable.ic_home to "Início",
-        R.drawable.ic_books to "Biblioteca",
-        R.drawable.ic_bars to "Atividade",
-        R.drawable.ic_gear to "Configurações",
+        Triple(R.drawable.ic_home, "Início", true),
+        Triple(R.drawable.ic_books, "Vantagens", true),
+        Triple(R.drawable.ic_bars, "Atividade", false),
+        Triple(R.drawable.ic_gear, "Configurações", false),
     )
     Row(
         Modifier
@@ -674,20 +677,23 @@ private fun TabBar() {
             .padding(vertical = Space.md),
         horizontalArrangement = Arrangement.SpaceEvenly,
     ) {
-        tabs.forEachIndexed { i, (icon, label) ->
+        tabs.forEachIndexed { i, (icon, label, live) ->
             val selected = i == 0
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = if (i == 1) Modifier.clickable(onClick = onOpenOffers) else Modifier,
+            ) {
                 Icon(
                     painterResource(icon),
                     contentDescription = label,
-                    tint = if (selected) c.green else c.textMuted,
+                    tint = if (selected) c.green else if (live) c.textSecondary else c.textMuted,
                     modifier = Modifier.size(22.dp),
                 )
                 Spacer(Modifier.height(Space.xs))
                 Text(
                     label,
                     style = Xau.type.caption,
-                    color = if (selected) c.green else c.textMuted,
+                    color = if (selected) c.green else if (live) c.textSecondary else c.textMuted,
                 )
             }
         }

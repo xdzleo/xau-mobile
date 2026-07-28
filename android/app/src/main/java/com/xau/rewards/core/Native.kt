@@ -167,6 +167,68 @@ object Api {
             )
         }
 
+    // ---------------------------------------------------------- offers
+
+    /** Every account's Game Pass offers, claimed or not. */
+    suspend fun offersAll(): List<AccountOffers> =
+        arr("offers_all").map { a ->
+            AccountOffers(
+                xuid = a.getString("xuid"),
+                gamertag = a.optString("gamertag"),
+                error = if (a.isNull("error")) null else a.getString("error"),
+                offers = a.getJSONArray("offers").let { list ->
+                    (0 until list.length()).map { i ->
+                        val o = list.getJSONObject(i)
+                        Offer(
+                            offerId = o.getString("offerId"),
+                            title = if (o.isNull("title")) null else o.getString("title"),
+                            description = if (o.isNull("description")) null else o.getString("description"),
+                            status = o.optString("status"),
+                            resourceType = if (o.isNull("resourceType")) null else o.getString("resourceType"),
+                            resource = if (o.isNull("resource")) null else o.getString("resource"),
+                            claimedDate = if (o.isNull("claimedDate")) null else o.getString("claimedDate"),
+                            available = o.optBoolean("available"),
+                            claimed = o.optBoolean("claimed"),
+                        )
+                    }
+                },
+            )
+        }
+
+    /**
+     * Claim every available offer across every account.
+     *
+     * IRREVERSIBLE. Each reward is written to its own CSV on the device
+     * before it is reported here.
+     */
+    suspend fun claimOffersAll(): ClaimOffersResult {
+        val r = obj("claim_offers_all")
+        val claimed = r.getJSONArray("claimed").let { list ->
+            (0 until list.length()).map { i ->
+                val c = list.getJSONObject(i)
+                ClaimedOffer(
+                    gamertag = c.optString("gamertag"),
+                    offerId = c.optString("offerId"),
+                    title = if (c.isNull("title")) null else c.getString("title"),
+                    resourceType = if (c.isNull("resourceType")) null else c.getString("resourceType"),
+                    resource = if (c.isNull("resource")) null else c.getString("resource"),
+                    csv = if (c.isNull("csv")) null else c.getString("csv"),
+                )
+            }
+        }
+        val fails = r.getJSONArray("failures").let { list ->
+            (0 until list.length()).map { i ->
+                val f = list.getJSONObject(i)
+                "${f.optString("gamertag")}: ${f.optString("error")}"
+            }
+        }
+        return ClaimOffersResult(
+            claimed = claimed,
+            failures = fails,
+            indexCsv = if (r.isNull("indexCsv")) null else r.getString("indexCsv"),
+        )
+    }
+
     // ------------------------------------------------------------ misc
 
     suspend fun publicIp(): String = obj("public_ip").getString("ip")
@@ -219,6 +281,45 @@ data class Mission(
     val progress: Int,
     val done: Boolean,
     val open: Boolean,
+)
+
+data class Offer(
+    val offerId: String,
+    /** From the content feed. Null when it had nothing for this offer. */
+    val title: String?,
+    val description: String?,
+    val status: String,
+    /** `external-link`, `store-token`, … Treated as opaque. */
+    val resourceType: String?,
+    /** The reward. Null until claimed — claiming is what mints it. */
+    val resource: String?,
+    val claimedDate: String?,
+    val available: Boolean,
+    val claimed: Boolean,
+)
+
+data class AccountOffers(
+    val xuid: String,
+    val gamertag: String,
+    val offers: List<Offer>,
+    /** Set when this account's list could not be read; others still load. */
+    val error: String?,
+)
+
+data class ClaimedOffer(
+    val gamertag: String,
+    val offerId: String,
+    val title: String?,
+    val resourceType: String?,
+    val resource: String?,
+    /** Where the reward was written on disk. */
+    val csv: String?,
+)
+
+data class ClaimOffersResult(
+    val claimed: List<ClaimedOffer>,
+    val failures: List<String>,
+    val indexCsv: String?,
 )
 
 data class FarmTitle(val titleId: String, val name: String)

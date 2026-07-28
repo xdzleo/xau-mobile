@@ -46,6 +46,7 @@ import com.xau.rewards.core.Api
 import com.xau.rewards.ui.AccountDetail
 import com.xau.rewards.ui.HomeScreen
 import com.xau.rewards.ui.LoginScreen
+import com.xau.rewards.ui.OffersScreen
 import com.xau.rewards.ui.StateBlock
 import com.xau.rewards.ui.theme.Radius
 import com.xau.rewards.ui.theme.Space
@@ -79,6 +80,7 @@ class MainActivity : ComponentActivity() {
                 val state by vm.state.collectAsStateWithLifecycle()
                 var loggingIn by remember { mutableStateOf(false) }
                 var openAccount by remember { mutableStateOf<String?>(null) }
+                var showOffers by remember { mutableStateOf(false) }
 
                 // Polling only while the screen is actually in front of
                 // the user; a background poll costs battery to refresh
@@ -121,6 +123,8 @@ class MainActivity : ComponentActivity() {
                             },
                         )
 
+                        showOffers -> OffersScreen(onBack = { showOffers = false })
+
                         openAccount != null && state.accounts.any { it.xuid == openAccount } ->
                             AccountDetail(
                                 account = state.accounts.first { it.xuid == openAccount },
@@ -138,6 +142,7 @@ class MainActivity : ComponentActivity() {
                             onAddAccount = { loggingIn = true },
                             onToggleFarm = vm::toggleFarm,
                             onOpenAccount = { openAccount = it.xuid },
+                            onOpenOffers = { showOffers = true },
                             onRetry = { vm.refresh() },
                         )
                     }

@@ -20,6 +20,7 @@
 //! reachable, and the linker drops them.
 
 pub mod accounts;
+pub mod offers_csv;
 
 use std::time::Duration;
 
@@ -27,6 +28,7 @@ use xau_core::error::{Error, Result};
 use xau_core::oauth::{
     classify_redirect, AuthSession, CodeFlow, RedirectOutcome, XboxSignedClient,
 };
+use xau_core::xbox::client::offers::Offer;
 use xau_core::xbox::client::rewards::{ClaimResult, RewardsInfo};
 use xau_core::xbox::farm::{Farm, FarmConfig, FIXED_CONSOLE_TITLES};
 // Re-exported: the JNI bridge holds the handle to stop the farm and to
@@ -284,6 +286,39 @@ pub async fn rewards(session: &Session) -> Result<RewardsInfo> {
 /// Propagates transport and Xbox-side failures.
 pub async fn claim(session: &Session) -> Result<ClaimResult> {
     session.client.claim_rewards_points(&session.xuid).await
+}
+
+// --------------------------------------------------------------- offers
+
+/// Every Game Pass member offer on this account, claimed or not.
+///
+/// # Errors
+/// Propagates transport and Xbox-side failures.
+pub async fn offers(session: &Session) -> Result<Vec<Offer>> {
+    session.client.get_offers().await
+}
+
+/// Human names for offers, best effort.
+///
+/// # Errors
+/// Only if the HTTP client cannot be used; a content feed that fails
+/// yields an empty map rather than an error.
+pub async fn offer_names(
+    session: &Session,
+) -> Result<std::collections::HashMap<String, xau_core::xbox::client::offer_names::OfferName>> {
+    session.client.get_offer_names("BR", "pt-BR").await
+}
+
+/// Claim one offer and return it with its minted resource.
+///
+/// **Irreversible**: this consumes the offer for that account. The
+/// caller must be acting on an explicit user instruction, never on a
+/// timer or a sweep the user did not ask for.
+///
+/// # Errors
+/// Propagates transport and Xbox-side failures.
+pub async fn claim_offer(session: &Session, offer_id: &str) -> Result<Offer> {
+    session.client.claim_offer(offer_id).await
 }
 
 // ----------------------------------------------------------------- farm

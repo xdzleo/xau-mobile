@@ -422,6 +422,119 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
             }))
         }
 
+        // ---- offers ----
+
+        // Every account's offers at once: the screen is a cross-account
+        // view, and one account failing must not blank the others.
+        "offers_all" => {
+            let sessions: Vec<Arc<Session>> = {
+                let guard = state()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                guard.sessions.values().cloned().collect()
+            };
+            // Names come from a separate, unauthenticated content feed,
+            // so it is fetched once and shared across accounts rather
+            // than per account. A failure here costs labels, not data.
+            let names = if let Some(first) = sessions.first() {
+                xau_mobile::offer_names(first).await.unwrap_or_default()
+            } else {
+                Default::default()
+            };
+            let mut out = Vec::new();
+            for s in sessions {
+                let (offers, error) = match xau_mobile::offers(&s).await {
+                    Ok(o) => (o, None),
+                    Err(e) => (Vec::new(), Some(e.to_string())),
+                };
+                out.push(json!({
+                    "xuid": s.xuid(),
+                    "gamertag": s.gamertag(),
+                    "error": error,
+                    "offers": offers.iter().map(|o| json!({
+                        "offerId": o.offer_id,
+                        "title": names.get(&o.offer_id).map(|n| n.title.clone()),
+                        "description": names.get(&o.offer_id).map(|n| n.description.clone()),
+                        "status": o.offer_status,
+                        "resourceType": o.resource_type,
+                        "resource": o.resource,
+                        "claimedDate": o.claimed_date,
+                        "available": o.is_available(),
+                        "claimed": o.is_claimed(),
+                    })).collect::<Vec<_>>(),
+                }));
+            }
+            Ok(Value::Array(out))
+        }
+
+        // Claim every available offer, on every account.
+        //
+        // IRREVERSIBLE, and only ever reached from an explicit tap —
+        // never a poll, never the auto-claim that settles points. Each
+        // reward is written to its own CSV BEFORE being reported, so a
+        // resource that is minted once cannot be lost to a crash or a
+        // dismissed toast.
+        "claim_offers_all" => {
+            let sessions: Vec<Arc<Session>> = {
+                let guard = state()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                guard.sessions.values().cloned().collect()
+            };
+            let names = if let Some(first) = sessions.first() {
+                xau_mobile::offer_names(first).await.unwrap_or_default()
+            } else {
+                Default::default()
+            };
+            let mut claimed = Vec::new();
+            let mut failures = Vec::new();
+            for s in sessions {
+                let available = match xau_mobile::offers(&s).await {
+                    Ok(list) => list,
+                    Err(e) => {
+                        failures.push(json!({ "gamertag": s.gamertag(), "error": e.to_string() }));
+                        continue;
+                    }
+                };
+                for offer in available.iter().filter(|o| o.is_available()) {
+                    // Serial: these are claims against one account under
+                    // one IP, and a burst is what a rate limiter notices.
+                    match xau_mobile::claim_offer(&s, &offer.offer_id).await {
+                        Ok(done) => {
+                            let csv = xau_mobile::offers_csv::write_offer(
+                                s.gamertag(),
+                                s.xuid(),
+                                &done,
+                                names.get(&done.offer_id).map(|n| n.title.as_str()),
+                            );
+                            claimed.push(json!({
+                                "gamertag": s.gamertag(),
+                                "offerId": done.offer_id,
+                                "title": names.get(&done.offer_id).map(|n| n.title.clone()),
+                                "resourceType": done.resource_type,
+                                "resource": done.resource,
+                                "csv": csv.as_ref().ok().map(|p| p.display().to_string()),
+                                "csvError": csv.err().map(|e| e.to_string()),
+                            }));
+                        }
+                        Err(e) => failures.push(json!({
+                            "gamertag": s.gamertag(),
+                            "offerId": offer.offer_id,
+                            "error": e.to_string(),
+                        })),
+                    }
+                }
+            }
+            let index = xau_mobile::offers_csv::write_index()
+                .ok()
+                .map(|p| p.display().to_string());
+            Ok(json!({
+                "claimed": claimed,
+                "failures": failures,
+                "indexCsv": index,
+            }))
+        }
+
         // ---- farm ----
         "farm_titles" => Ok(Value::Array(
             xau_mobile::farm_titles()

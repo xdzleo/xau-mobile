@@ -15,6 +15,8 @@ use reqwest::{Client, Method};
 use serde::Deserialize;
 use serde_json::Value;
 
+pub mod offer_names;
+pub mod offers;
 /// Heuristic for "retry this request". Matches:
 /// - network timeouts (reqwest tagged)
 /// - body decode failures that look transient (mid-stream reset)

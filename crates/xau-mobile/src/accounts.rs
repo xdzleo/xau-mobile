@@ -79,6 +79,20 @@ pub struct Store {
     pub emails: BTreeMap<String, String>,
 }
 
+/// The directory this app may write to.
+///
+/// The host supplies it (Android's `Context.getFilesDir()`); the
+/// platform default is the fallback for desktop and tests.
+///
+/// # Errors
+/// Propagates whatever the platform resolver reports.
+pub fn data_dir() -> Result<PathBuf> {
+    if let Some(dir) = DATA_DIR.get() {
+        return Ok(dir.clone());
+    }
+    Ok(xau_core::settings::credentials_dir()?)
+}
+
 fn store_path() -> Result<PathBuf> {
     if let Some(dir) = DATA_DIR.get() {
         return Ok(dir.join("accounts.json"));
