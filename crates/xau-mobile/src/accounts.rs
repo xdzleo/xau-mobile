@@ -15,11 +15,34 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
 use crate::Session;
 use xau_core::error::{Error, Result};
+
+/// Where accounts are stored, when the host tells us.
+///
+/// `xau_core::settings::credential_path` resolves through the
+/// `directories` crate, which on desktop means `%LOCALAPPDATA%` or
+/// `$XDG_DATA_HOME`. **On Android that resolution is wrong**: there is
+/// no `$HOME` for an app process, so it lands on `/.local/share`, which
+/// is not writable — every save fails, and an app that treats a failed
+/// save as a failed login then throws away a session that authenticated
+/// perfectly well.
+///
+/// Android has exactly one correct answer and only the Java side knows
+/// it: `Context.getFilesDir()`. The host passes it in at startup.
+static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Point the account store at a host-supplied directory.
+///
+/// Call once, before anything reads or writes the store. Later calls
+/// are ignored rather than racing a path change past an open file.
+pub fn set_data_dir(dir: impl Into<PathBuf>) {
+    let _ = DATA_DIR.set(dir.into());
+}
 
 /// One signed-in account as the UI sees it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -45,6 +68,9 @@ pub struct Store {
 }
 
 fn store_path() -> Result<PathBuf> {
+    if let Some(dir) = DATA_DIR.get() {
+        return Ok(dir.join("accounts.json"));
+    }
     xau_core::settings::credential_path("accounts.json")
 }
 
@@ -165,6 +191,27 @@ mod tests {
         assert!(s.remove("1"));
         assert!(!s.remove("1"));
         assert!(s.is_empty());
+    }
+
+    /// The host-supplied directory must win over the `directories`
+    /// crate. On Android that crate resolves to an unwritable path, and
+    /// the resulting save failure once took a perfectly good login down
+    /// with it — the screen showed "no accounts connected" after a
+    /// successful sign-in.
+    ///
+    /// This is the only test that touches the global override, which is
+    /// a `OnceLock` and therefore one-shot per process.
+    #[test]
+    fn a_host_supplied_directory_overrides_the_platform_default() {
+        let dir = std::env::temp_dir().join("xau-store-test");
+        set_data_dir(dir.clone());
+        let path = store_path().expect("path");
+        assert_eq!(path, dir.join("accounts.json"));
+
+        // And a second call cannot move the store out from under an
+        // already-open file.
+        set_data_dir(std::env::temp_dir().join("somewhere-else"));
+        assert_eq!(store_path().expect("path"), dir.join("accounts.json"));
     }
 
     /// A row must not claim a balance it has never fetched — `None`

@@ -67,17 +67,37 @@ class MainActivity : ComponentActivity() {
                     when {
                         loggingIn -> LoginScreen(
                             onCode = { code ->
-                                loggingIn = false
                                 lifecycleScope.launch {
                                     runCatching { Api.finishLogin(code) }
-                                        .onSuccess { vm.onLoggedIn(it) }
+                                        .onSuccess { out ->
+                                            // Only leave the login screen
+                                            // once the exchange landed;
+                                            // dropping out first showed the
+                                            // empty state while the account
+                                            // was still on its way.
+                                            loggingIn = false
+                                            vm.onLoggedIn(out.accounts, out.warning)
+                                        }
+                                        .onFailure { e ->
+                                            // Was silently swallowed. A
+                                            // sign-in that failed after
+                                            // Microsoft accepted the
+                                            // password looked exactly like
+                                            // one that never happened.
+                                            loggingIn = false
+                                            vm.reportLoginFailure(e)
+                                        }
                                 }
                             },
                             onCancel = { loggingIn = false },
-                            onError = { loggingIn = false },
+                            onError = { msg ->
+                                loggingIn = false
+                                vm.reportLoginFailure(Exception(msg))
+                            },
                         )
 
-                        !state.booting && !state.signedIn -> Welcome { loggingIn = true }
+                        !state.booting && !state.signedIn ->
+                            Welcome(error = state.fatal) { loggingIn = true }
 
                         else -> HomeScreen(
                             state = state,
@@ -103,15 +123,29 @@ class MainActivity : ComponentActivity() {
  * action that fills it.
  */
 @Composable
-private fun Welcome(onAdd: () -> Unit) {
+private fun Welcome(error: String?, onAdd: () -> Unit) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        StateBlock(
-            title = "Nenhuma conta conectada",
-            detail = "Entre com a sua conta Microsoft para ver o saldo do Rewards, " +
-                "resgatar os pontos pendentes e rodar o farm de presença.",
-            actionLabel = "Entrar",
-            onAction = onAdd,
-        )
+        // When a sign-in failed, this screen must say so. Without the
+        // error it is indistinguishable from never having tried — which
+        // is exactly what made a broken login look like nothing at all
+        // had happened.
+        if (error != null) {
+            StateBlock(
+                title = "Não foi possível conectar",
+                detail = error,
+                actionLabel = "Tentar de novo",
+                onAction = onAdd,
+                tone = Xau.colors.danger,
+            )
+        } else {
+            StateBlock(
+                title = "Nenhuma conta conectada",
+                detail = "Entre com a sua conta Microsoft para ver o saldo do Rewards, " +
+                    "resgatar os pontos pendentes e rodar o farm de presença.",
+                actionLabel = "Entrar",
+                onAction = onAdd,
+            )
+        }
     }
 }
 

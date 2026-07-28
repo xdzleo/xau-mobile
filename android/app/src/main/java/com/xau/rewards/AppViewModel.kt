@@ -118,9 +118,28 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             .onFailure { e -> _state.update { it.copy(fatal = e.message) } }
     }
 
-    fun onLoggedIn(accounts: List<Account>) {
-        _state.update { it.copy(accounts = accounts, fatal = null, notice = "Conta conectada") }
+    fun onLoggedIn(accounts: List<Account>, warning: String? = null) {
+        _state.update {
+            it.copy(
+                accounts = accounts,
+                fatal = null,
+                notice = warning ?: "Conta conectada",
+            )
+        }
         refresh()
+    }
+
+    /**
+     * Surface a sign-in that failed after Microsoft accepted the
+     * password.
+     *
+     * Without this the screen fell back to "no accounts connected",
+     * which is what a sign-in that never started also looks like — so
+     * the one case the user needed to distinguish was the one case they
+     * could not.
+     */
+    fun reportLoginFailure(e: Throwable) {
+        _state.update { it.copy(fatal = e.message ?: "falha ao conectar a conta") }
     }
 
     // ---------------------------------------------------------- rewards

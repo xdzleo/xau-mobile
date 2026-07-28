@@ -48,8 +48,8 @@ android {
         // built against the API 24 sysroot, which 26 satisfies.
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.0.1"
 
         // Only arm64. Every Android phone shipped since 2019 is arm64,
         // and each extra ABI adds ~12 MB of Rust to the APK for devices

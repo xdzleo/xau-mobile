@@ -11,12 +11,27 @@ import org.json.JSONObject
  * at whichever screen happened to call it.
  */
 internal object Native {
-    init {
-        System.loadLibrary("xau_jni")
-        init()
+    @Volatile
+    private var started = false
+
+    /**
+     * Load the library and hand the core a writable directory.
+     *
+     * Must run before any [call]. Rust cannot work the path out itself
+     * on Android — its directory crate falls back to `$HOME/.local/share`,
+     * which for an app process is `/` and is not writable.
+     */
+    fun start(filesDir: String) {
+        if (started) return
+        synchronized(this) {
+            if (started) return
+            System.loadLibrary("xau_jni")
+            init(filesDir)
+            started = true
+        }
     }
 
-    external fun init()
+    external fun init(dataDir: String)
 
     external fun call(method: String, args: String): String?
 }
@@ -67,8 +82,20 @@ object Api {
         return if (r.getBoolean("done")) r.getString("code") else null
     }
 
-    suspend fun finishLogin(code: String): List<Account> =
-        arr("finish_login", JSONObject().put("code", code)).toAccounts()
+    /**
+     * Exchange the authorization code for a live session.
+     *
+     * [LoginOutcome.warning] is set when the account signed in but could
+     * not be written to disk — it works now and will be gone after a
+     * restart, and the user is entitled to know which of those is true.
+     */
+    suspend fun finishLogin(code: String): LoginOutcome {
+        val r = obj("finish_login", JSONObject().put("code", code))
+        return LoginOutcome(
+            accounts = r.getJSONArray("accounts").toAccounts(),
+            warning = if (r.isNull("warning")) null else r.getString("warning"),
+        )
+    }
 
     suspend fun signOut(xuid: String): List<Account> =
         arr("sign_out", JSONObject().put("xuid", xuid)).toAccounts()
@@ -148,6 +175,8 @@ data class Account(
 )
 
 data class ClaimOutcome(val pointsAdded: Long, val accounts: List<Account>)
+
+data class LoginOutcome(val accounts: List<Account>, val warning: String?)
 
 data class FarmTitle(val titleId: String, val name: String)
 

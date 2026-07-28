@@ -229,10 +229,14 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
             let session = xau_mobile::finish_login(&arg("code")).await?;
             let xuid = session.xuid().to_string();
 
+            // Register the live session BEFORE touching disk. Persisting
+            // is what lets the account survive a relaunch; it is not what
+            // makes the login real. Ordering these the other way round —
+            // with a `?` on the save — threw away a session that had
+            // authenticated perfectly well, and the screen then showed
+            // "no accounts connected" as though sign-in had failed.
             let mut store = Store::load();
             store.put(&xuid, session.xauth());
-            store.save()?;
-
             {
                 let mut guard = state()
                     .lock()
@@ -241,7 +245,19 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
                 guard.stale.remove(&xuid);
                 guard.active = Some(xuid);
             }
-            Ok(refresh_all().await)
+
+            // Report a failed save instead of swallowing it: the account
+            // works right now but will be gone after a restart, and the
+            // user is entitled to know which of those two is true.
+            let warning = store.save().err().map(|e| {
+                tracing::warn!(%e, "account saved in memory only");
+                format!("conectado, mas não foi possível salvar a sessão: {e}")
+            });
+
+            Ok(json!({
+                "accounts": refresh_all().await,
+                "warning": warning,
+            }))
         }
 
         "sign_out" => {
@@ -415,7 +431,12 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
 
 // --------------------------------------------------------------- entry
 
-/// Initialise logging. Safe to call more than once.
+/// Initialise logging and tell the core where it may write.
+///
+/// `data_dir` must be the app's own `Context.getFilesDir()`. Rust cannot
+/// work this out for itself on Android — the `directories` crate falls
+/// back to `$HOME/.local/share`, which for an app process is `/` and is
+/// not writable. Getting it from Java is the only correct answer.
 ///
 /// `no_mangle` is what makes the symbol findable by name from the JVM;
 /// the workspace warns on it because a duplicate export would be
@@ -424,7 +445,11 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
 /// library in this process can collide with.
 #[allow(unsafe_code)]
 #[no_mangle]
-pub extern "system" fn Java_com_xau_rewards_core_Native_init(_env: JNIEnv, _class: JClass) {
+pub extern "system" fn Java_com_xau_rewards_core_Native_init(
+    mut env: JNIEnv,
+    _class: JClass,
+    data_dir: JString,
+) {
     #[cfg(target_os = "android")]
     {
         use tracing_subscriber::layer::SubscriberExt as _;
@@ -437,6 +462,18 @@ pub extern "system" fn Java_com_xau_rewards_core_Native_init(_env: JNIEnv, _clas
         let _ = tracing_subscriber::registry()
             .with(tracing_subscriber::EnvFilter::new("info"))
             .try_init();
+    }
+
+    // Read it unconditionally so the host contract is the same on every
+    // target and a desktop test harness can point the store somewhere
+    // temporary. An empty string means "you decide", which keeps the
+    // desktop path working.
+    if let Ok(dir) = env.get_string(&data_dir) {
+        let dir: String = dir.into();
+        if !dir.is_empty() {
+            tracing::info!(%dir, "account store directory");
+            accounts::set_data_dir(dir);
+        }
     }
 }
 
