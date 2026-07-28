@@ -36,6 +36,11 @@ data class UiState(
     val active: Account? get() = accounts.firstOrNull { it.active } ?: accounts.firstOrNull()
     val signedIn: Boolean get() = accounts.isNotEmpty()
     val totalWaiting: Long get() = accounts.sumOf { it.unclaimed ?: 0L }
+    /** Null when any account failed to report — a partial sum is a
+     *  more confident lie than an em dash. */
+    val totalBalance: Long?
+        get() = if (accounts.any { it.balance == null }) null
+        else accounts.sumOf { it.balance ?: 0L }
 }
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
@@ -199,17 +204,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ------------------------------------------------------------- farm
 
-    fun toggleFarm() = viewModelScope.launch {
-        val xuid = _state.value.active?.xuid ?: return@launch
-        val running = _state.value.farm?.running == true
+    /** Per account: the core keys farms by xuid, so the UI does too. */
+    fun toggleFarm(xuid: String) = viewModelScope.launch {
+        val running = _state.value.accounts.firstOrNull { it.xuid == xuid }?.farming == true
         runCatching { if (running) Api.farmStop(xuid) else Api.farmStart(xuid) }
             .onSuccess {
                 // The foreground service follows the farm, not the tap:
                 // starting it before the core confirmed would leave a
                 // notification advertising a farm that failed to start.
                 val ctx = getApplication<Application>()
-                if (running) FarmService.stop(ctx) else FarmService.start(ctx)
-                refreshFarm()
+                // The notification tracks whether ANY account is
+                // farming, not the one just tapped.
+                val anyLeft = _state.value.accounts.any { it.farming && it.xuid != xuid }
+                if (running && !anyLeft) FarmService.stop(ctx) else FarmService.start(ctx)
+                refresh(quiet = true)
             }
             .onFailure { e -> _state.update { it.copy(notice = e.message) } }
     }

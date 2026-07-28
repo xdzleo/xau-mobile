@@ -115,7 +115,7 @@ fn account_json(xuid: &str, gamertag: &str, pic: &str, score: i64) -> Value {
 }
 
 /// Describe every live session, merging in the balances held per xuid.
-async fn snapshot(balances: &HashMap<String, (i64, i64)>) -> Value {
+async fn snapshot(balances: &HashMap<String, (i64, i64, Option<i64>)>) -> Value {
     let sessions: Vec<Arc<Session>> = {
         let guard = state()
             .lock()
@@ -127,9 +127,10 @@ async fn snapshot(balances: &HashMap<String, (i64, i64)>) -> Value {
     for s in sessions {
         let (pic, score) = s.profile_display().await.unwrap_or_default();
         let mut row = account_json(s.xuid(), s.gamertag(), &pic, score);
-        if let Some((balance, unclaimed)) = balances.get(s.xuid()) {
+        if let Some((balance, unclaimed, level)) = balances.get(s.xuid()) {
             row["balance"] = json!(balance);
             row["unclaimed"] = json!(unclaimed);
+            row["level"] = json!(level);
         }
         out.push(row);
     }
@@ -187,7 +188,10 @@ async fn refresh_all() -> Value {
         // built to notice.
         match xau_mobile::rewards(&s).await {
             Ok(info) => {
-                balances.insert(s.xuid().to_string(), (info.balance, info.unclaimed));
+                balances.insert(
+                    s.xuid().to_string(),
+                    (info.balance, info.unclaimed, info.level),
+                );
             }
             Err(e) => {
                 stale.insert(s.xuid().to_string(), e.to_string());

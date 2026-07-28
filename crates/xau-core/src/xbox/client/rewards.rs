@@ -44,6 +44,9 @@ pub struct RewardsInfo {
     pub pending: Vec<PendingActivity>,
     /// Rewards program the account is enrolled in, when reported.
     pub program: Option<String>,
+    /// Membership level 1-3. `None` when the payload did not carry
+    /// one; that is not the same as level 1.
+    pub level: Option<i64>,
 }
 
 /// One claimable activity ("Play a game on console", a daily quest, …).
@@ -236,6 +239,8 @@ fn parse_program_info(v: &serde_json::Value) -> RewardsInfo {
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
 
+    let level = find_level(v);
+
     let mut pending = Vec::new();
     collect_pending(v, &mut pending);
 
@@ -244,7 +249,47 @@ fn parse_program_info(v: &serde_json::Value) -> RewardsInfo {
         unclaimed,
         pending,
         program,
+        level,
     }
+}
+
+/// Rewards membership level (1, 2 or 3), when the payload carries one.
+///
+/// The exact key has not been confirmed against a live response yet, so
+/// this checks the places it plausibly lives rather than committing to
+/// one. **`None` is a real answer** — a caller must render "unknown"
+/// rather than defaulting to 1, because "this account has not levelled
+/// up" and "we could not read the level" are different facts and the
+/// whole point of showing it is to tell them apart.
+fn find_level(v: &serde_json::Value) -> Option<i64> {
+    let as_level = |x: Option<&serde_json::Value>| -> Option<i64> {
+        let x = x?;
+        x.as_i64()
+            // Some Rewards fields carry the level as a string, and at
+            // least one as "Level2".
+            .or_else(|| x.as_str().and_then(|s| s.trim().parse().ok()))
+            .or_else(|| {
+                x.as_str().and_then(|s| {
+                    s.trim_start_matches(|c: char| !c.is_ascii_digit())
+                        .parse()
+                        .ok()
+                })
+            })
+            .filter(|n| (1..=3).contains(n))
+    };
+
+    let attrs = v.get("profile").and_then(|p| p.get("attributes"));
+    as_level(v.get("level"))
+        .or_else(|| as_level(attrs.and_then(|a| a.get("level"))))
+        .or_else(|| as_level(attrs.and_then(|a| a.get("levelNumber"))))
+        .or_else(|| as_level(attrs.and_then(|a| a.get("membershipLevel"))))
+        .or_else(|| {
+            as_level(
+                v.get("tiersProfile")
+                    .and_then(|t| t.get("currentTier"))
+                    .and_then(|t| t.get("level")),
+            )
+        })
 }
 
 /// Walk the payload for activities that are finished but not yet claimed.
