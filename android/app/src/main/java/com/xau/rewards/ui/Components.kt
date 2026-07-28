@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -114,6 +115,43 @@ fun Modifier.pressable(onClick: () -> Unit, onLongClick: () -> Unit): Modifier {
             onClick = onClick,
             onLongClick = onLongClick,
         )
+}
+
+/**
+ * Press feedback for a full-bleed row: no scale.
+ *
+ * [pressable]'s 0.97 shrink is right for an inset card and wrong here —
+ * scaling something that runs to the screen edge opens a gap at the
+ * edge, which reads as breakage rather than as a press.
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+fun Modifier.pressableRow(onClick: () -> Unit, onLongClick: () -> Unit): Modifier =
+    combinedClickable(
+        interactionSource = remember { MutableInteractionSource() },
+        indication = androidx.compose.material3.ripple(color = Xau.colors.focus),
+        onClick = onClick,
+        onLongClick = onLongClick,
+    )
+
+/**
+ * A dot leader: the loading form for a figure that has not arrived.
+ *
+ * A row of periods where a number belongs is how a printed register
+ * shows a missing entry, and unlike a shimmer it survives being static
+ * — the previous skeleton's sweeping gradient measured 1.19:1 against
+ * its own background and was, in practice, invisible.
+ */
+@Composable
+fun DotLeader(width: Dp, modifier: Modifier = Modifier) {
+    Text(
+        "·".repeat(40),
+        modifier = modifier.width(width),
+        style = Xau.type.register,
+        color = Xau.colors.rule,
+        maxLines = 1,
+        overflow = androidx.compose.ui.text.style.TextOverflow.Clip,
+    )
 }
 
 // -------------------------------------------------------------- number
