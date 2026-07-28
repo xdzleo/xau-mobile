@@ -474,6 +474,24 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
         // reward is written to its own CSV BEFORE being reported, so a
         // resource that is minted once cannot be lost to a crash or a
         // dismissed toast.
+        // Every code recorded for one offer, across all accounts. Read
+        // from the CSVs on disk, so an account that claimed on an
+        // earlier run -- or has since been signed out -- still shows up.
+        "offer_codes" => {
+            let rows = xau_mobile::offers_csv::rows_for_offer(&arg("offerId"))?;
+            Ok(Value::Array(
+                rows.iter()
+                    .map(|r| {
+                        json!({
+                            "gamertag": r.gamertag,
+                            "code": r.code,
+                            "claimedDate": r.claimed_date,
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            ))
+        }
+
         "claim_offers_all" => {
             let sessions: Vec<Arc<Session>> = {
                 let guard = state()

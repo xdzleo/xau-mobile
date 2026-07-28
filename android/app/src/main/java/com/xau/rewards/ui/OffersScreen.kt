@@ -1,5 +1,6 @@
 package com.xau.rewards.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -42,7 +43,7 @@ import com.xau.rewards.R
 import com.xau.rewards.core.AccountOffers
 import com.xau.rewards.core.Api
 import com.xau.rewards.core.ClaimOffersResult
-import com.xau.rewards.core.Offer
+import com.xau.rewards.core.OfferCode
 import com.xau.rewards.ui.theme.Radius
 import com.xau.rewards.ui.theme.Space
 import com.xau.rewards.ui.theme.Xau
@@ -57,6 +58,12 @@ import kotlinx.coroutines.launch
  * it asks first, and every reward is written to a CSV on the device
  * before it reaches this screen. A resource that exists only in a toast
  * is a resource that can be lost.
+ *
+ * The list is one card per reward rather than one per account-and-reward.
+ * A reward is the same perk wherever it is claimed; what differs per
+ * account is the code it minted, and that belongs in the reward's own
+ * detail — where every code for it sits together, ready to be worked
+ * through one at a time.
  */
 @Composable
 fun OffersScreen(onBack: () -> Unit) {
@@ -69,6 +76,7 @@ fun OffersScreen(onBack: () -> Unit) {
     var confirming by remember { mutableStateOf(false) }
     var claiming by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<ClaimOffersResult?>(null) }
+    var open by remember { mutableStateOf<OfferGroup?>(null) }
 
     suspend fun load() {
         runCatching { Api.offersAll() }
@@ -78,11 +86,23 @@ fun OffersScreen(onBack: () -> Unit) {
 
     LaunchedEffect(Unit) { load() }
 
-    val available = accounts.orEmpty().sumOf { a -> a.offers.count { it.available } }
+    BackHandler { if (open != null) open = null else onBack() }
+
+    open?.let { group ->
+        OfferCodesScreen(group, onBack = { open = null }) {
+            clipboard.setText(AnnotatedString(it))
+        }
+        return
+    }
+
+    val groups = remember(accounts) { group(accounts.orEmpty()) }
+    val available = groups.sumOf { it.available }
+    val failed = accounts.orEmpty().filter { it.error != null }
 
     if (confirming) {
         ClaimConfirmDialog(
             count = available,
+            accounts = accounts.orEmpty().size - failed.size,
             onConfirm = {
                 confirming = false
                 claiming = true
@@ -103,7 +123,13 @@ fun OffersScreen(onBack: () -> Unit) {
             .background(c.ink)
             .windowInsetsPadding(WindowInsets.safeDrawing),
     ) {
-        Header(onBack, available, claiming) { confirming = true }
+        Header(
+            onBack = onBack,
+            available = available,
+            accounts = accounts.orEmpty().size - failed.size,
+            claiming = claiming,
+            onClaim = { confirming = true },
+        )
 
         when {
             error != null -> StateBlock(
@@ -126,24 +152,82 @@ fun OffersScreen(onBack: () -> Unit) {
                 ),
                 verticalArrangement = Arrangement.spacedBy(Space.sm),
             ) {
-                result?.let { r ->
-                    item { ResultBanner(r) }
-                }
-                accounts.orEmpty().forEach { acct ->
-                    item { AccountHead(acct) }
-                    items(acct.offers.size) { i ->
-                        OfferRow(acct.offers[i]) { text ->
-                            clipboard.setText(AnnotatedString(text))
-                        }
+                result?.let { r -> item { ResultBanner(r) } }
+                // An account whose list failed to load is named rather
+                // than silently dropped: its rewards are missing from
+                // every count on this screen, and only it knows that.
+                failed.forEach { a ->
+                    item {
+                        Text(
+                            "${a.gamertag}: ${a.error}",
+                            style = Xau.type.caption,
+                            color = c.danger,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = Space.sm),
+                        )
                     }
                 }
+                items(groups.size) { i -> OfferCard(groups[i]) { open = groups[i] } }
             }
         }
     }
 }
 
+// ------------------------------------------------------------- grouping
+
+/** One reward, and how the accounts stand on it. */
+data class OfferGroup(
+    val offerId: String,
+    val title: String,
+    val description: String?,
+    val resourceType: String?,
+    val accounts: Int,
+    val available: Int,
+    val claimed: Int,
+)
+
+/**
+ * Collapse every account's list into one row per reward.
+ *
+ * Names come from the content feed and one account's response can be
+ * missing a title the next one carries, so the first non-null wins
+ * rather than whichever account happened to sort first.
+ */
+private fun group(accounts: List<AccountOffers>): List<OfferGroup> {
+    val byId = LinkedHashMap<String, OfferGroup>()
+    for (a in accounts) {
+        for (o in a.offers) {
+            val cur = byId[o.offerId]
+            byId[o.offerId] = OfferGroup(
+                offerId = o.offerId,
+                title = cur?.title?.takeIf { it.isNotBlank() }
+                    ?: o.title
+                    ?: prettyType(o.resourceType),
+                description = cur?.description ?: o.description,
+                resourceType = cur?.resourceType ?: o.resourceType,
+                accounts = (cur?.accounts ?: 0) + 1,
+                available = (cur?.available ?: 0) + if (o.available) 1 else 0,
+                claimed = (cur?.claimed ?: 0) + if (o.claimed) 1 else 0,
+            )
+        }
+    }
+    // Anything still claimable first — that is what the screen is for.
+    return byId.values.sortedWith(
+        compareByDescending<OfferGroup> { it.available > 0 }.thenBy { it.title },
+    )
+}
+
+// --------------------------------------------------------------- pieces
+
 @Composable
-private fun Header(onBack: () -> Unit, available: Int, claiming: Boolean, onClaim: () -> Unit) {
+private fun Header(
+    onBack: () -> Unit,
+    available: Int,
+    accounts: Int,
+    claiming: Boolean,
+    onClaim: () -> Unit,
+) {
     val c = Xau.colors
     Column {
         Row(
@@ -159,7 +243,7 @@ private fun Header(onBack: () -> Unit, available: Int, claiming: Boolean, onClai
             Column(Modifier.weight(1f)) {
                 Text("Vantagens", style = Xau.type.section, color = c.textPrimary)
                 Text(
-                    "$available disponíveis em todas as contas",
+                    "$available a resgatar em $accounts ${plural(accounts, "conta", "contas")}",
                     style = Xau.type.caption,
                     color = c.textSecondary,
                 )
@@ -190,19 +274,28 @@ private fun Header(onBack: () -> Unit, available: Int, claiming: Boolean, onClai
 
 /**
  * Claiming cannot be undone, so it is confirmed — and the dialog says
- * what actually happens, including where the rewards are written.
+ * what actually happens, including how many accounts it touches and
+ * where the rewards are written.
  */
 @Composable
-private fun ClaimConfirmDialog(count: Int, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+private fun ClaimConfirmDialog(
+    count: Int,
+    accounts: Int,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     val c = Xau.colors
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = c.surfaceHigh,
         shape = RoundedCornerShape(Radius.card),
-        title = { Text("Resgatar $count vantagens?", style = Xau.type.section, color = c.textPrimary) },
+        title = {
+            Text("Resgatar $count vantagens?", style = Xau.type.section, color = c.textPrimary)
+        },
         text = {
             Text(
-                "O resgate não pode ser desfeito: cada vantagem é consumida na conta " +
+                "Vale para ${plural(accounts, "a conta conectada", "as $accounts contas conectadas")}. " +
+                    "O resgate não pode ser desfeito: cada vantagem é consumida na conta " +
                     "onde for resgatada. Os links e códigos recebidos ficam salvos em " +
                     "CSV neste aparelho, um arquivo por vantagem.",
                 style = Xau.type.body,
@@ -252,27 +345,7 @@ private fun ResultBanner(r: ClaimOffersResult) {
 }
 
 @Composable
-private fun AccountHead(acct: AccountOffers) {
-    val c = Xau.colors
-    val avail = acct.offers.count { it.available }
-    Row(
-        Modifier.fillMaxWidth().padding(top = Space.lg, bottom = Space.xs),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(acct.gamertag, style = Xau.type.rowTitle, color = c.textPrimary)
-        Spacer(Modifier.width(Space.sm))
-        Text(
-            acct.error ?: "$avail disponíveis",
-            style = Xau.type.caption,
-            color = if (acct.error != null) c.danger else c.textSecondary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
-@Composable
-private fun OfferRow(offer: Offer, onCopy: (String) -> Unit) {
+private fun OfferCard(g: OfferGroup, onOpen: () -> Unit) {
     val c = Xau.colors
     Row(
         Modifier
@@ -280,14 +353,11 @@ private fun OfferRow(offer: Offer, onCopy: (String) -> Unit) {
             .clip(RoundedCornerShape(Radius.row))
             .background(c.surface)
             .border(1.dp, c.outline, RoundedCornerShape(Radius.row))
-            .then(
-                // Only a claimed offer has anything to copy.
-                offer.resource?.let { Modifier.clickable { onCopy(it) } } ?: Modifier,
-            )
+            .clickable(onClick = onOpen)
             .padding(Space.lg),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (offer.claimed) {
+        if (g.available == 0 && g.claimed > 0) {
             Icon(
                 painterResource(R.drawable.ic_check),
                 contentDescription = null,
@@ -307,28 +377,206 @@ private fun OfferRow(offer: Offer, onCopy: (String) -> Unit) {
             // none, so without it every row read "Código da Store" over a
             // GUID and the user could not tell one perk from another.
             Text(
-                offer.title ?: prettyType(offer.resourceType),
+                g.title,
                 style = Xau.type.rowTitle,
-                color = if (offer.claimed) c.textSecondary else c.textPrimary,
+                color = if (g.available > 0) c.textPrimary else c.textSecondary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(2.dp))
             Text(
-                offer.resource ?: offer.description ?: prettyType(offer.resourceType),
+                status(g),
                 style = Xau.type.caption,
-                color = if (offer.resource != null) c.green else c.textMuted,
+                color = if (g.available > 0) c.green else c.textMuted,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
 
-        if (offer.resource != null) {
+        Spacer(Modifier.width(Space.sm))
+        Text("›", style = Xau.type.section, color = c.textMuted)
+    }
+}
+
+private fun status(g: OfferGroup): String = when {
+    g.available > 0 && g.claimed > 0 ->
+        "${g.available} a resgatar · ${g.claimed} de ${g.accounts} já resgatadas"
+    g.available > 0 -> "${plural(g.available, "1 conta pode", "${g.available} contas podem")} resgatar"
+    g.claimed > 0 -> "resgatada em ${plural(g.claimed, "1 conta", "${g.claimed} contas")}"
+    else -> "indisponível nas contas conectadas"
+}
+
+// --------------------------------------------------------------- detail
+
+/**
+ * Every code this reward minted, read back from the CSVs on disk.
+ *
+ * On disk rather than from the claim that is still in memory: a code
+ * claimed on an earlier run — or on an account since signed out — is
+ * still the user's, and the files are the record. This is also why
+ * claiming writes before it reports.
+ */
+@Composable
+private fun OfferCodesScreen(g: OfferGroup, onBack: () -> Unit, onCopy: (String) -> Unit) {
+    val c = Xau.colors
+    val scope = rememberCoroutineScope()
+    var rows by remember(g.offerId) { mutableStateOf<List<OfferCode>?>(null) }
+    var error by remember(g.offerId) { mutableStateOf<String?>(null) }
+    // Which row was just copied. Android 13 draws its own clipboard
+    // bubble, but nothing below it does, and a tap that appears to do
+    // nothing reads as a broken button.
+    var copied by remember(g.offerId) { mutableStateOf<Int?>(null) }
+
+    LaunchedEffect(g.offerId) {
+        runCatching { Api.offerCodes(g.offerId) }
+            .onSuccess { rows = it }
+            .onFailure { error = it.message }
+    }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(c.ink)
+            .windowInsetsPadding(WindowInsets.safeDrawing),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(Space.gutter),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.size(Space.touch).clip(RoundedCornerShape(Radius.pill))
+                    .clickable(onClick = onBack),
+                contentAlignment = Alignment.Center,
+            ) { Text("‹", style = Xau.type.hero, color = c.textPrimary) }
             Spacer(Modifier.width(Space.sm))
-            Text("copiar", style = Xau.type.caption, color = c.textSecondary)
+            Column(Modifier.weight(1f)) {
+                Text(
+                    g.title,
+                    style = Xau.type.section,
+                    color = c.textPrimary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    rows?.let { plural(it.size, "1 código salvo", "${it.size} códigos salvos") }
+                        ?: "lendo o CSV…",
+                    style = Xau.type.caption,
+                    color = c.textSecondary,
+                )
+            }
+        }
+
+        when {
+            error != null -> StateBlock(
+                title = "Não foi possível ler o CSV",
+                detail = error.orEmpty(),
+                tone = c.danger,
+            )
+
+            rows == null -> Column(
+                Modifier.fillMaxWidth().padding(Space.gutter),
+                verticalArrangement = Arrangement.spacedBy(Space.md),
+            ) { repeat(3) { DotLeader(220.dp) } }
+
+            rows.orEmpty().isEmpty() -> StateBlock(
+                title = "Nenhum código ainda",
+                detail = "Um código só existe depois do resgate — é o resgate que o cria. " +
+                    "Resgates feitos fora do app não aparecem aqui.",
+            )
+
+            else -> LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    start = Space.gutter, end = Space.gutter, bottom = Space.xxl,
+                ),
+                verticalArrangement = Arrangement.spacedBy(Space.sm),
+            ) {
+                item { CodesHeader() }
+                items(rows.orEmpty().size) { i ->
+                    val r = rows.orEmpty()[i]
+                    CodeRow(r, copied == i) {
+                        onCopy(r.code)
+                        copied = i
+                        scope.launch {
+                            kotlinx.coroutines.delay(1_600)
+                            if (copied == i) copied = null
+                        }
+                    }
+                }
+            }
         }
     }
 }
+
+/** The two columns of the CSV, named once above the rows. */
+@Composable
+private fun CodesHeader() {
+    val c = Xau.colors
+    Row(Modifier.fillMaxWidth().padding(top = Space.xs, bottom = Space.xs)) {
+        Text("CÓDIGO / LINK", style = Xau.type.captionStrong, color = c.textMuted)
+        Spacer(Modifier.weight(1f))
+        Text("DATA", style = Xau.type.captionStrong, color = c.textMuted)
+    }
+}
+
+@Composable
+private fun CodeRow(r: OfferCode, justCopied: Boolean, onCopy: () -> Unit) {
+    val c = Xau.colors
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radius.row))
+            .background(c.surface)
+            .border(1.dp, c.outline, RoundedCornerShape(Radius.row))
+            .clickable(onClick = onCopy)
+            .padding(Space.lg),
+    ) {
+        // Three lines, not one truncated one: a promo URL is the thing
+        // the user came for, and a link cut off at the ellipsis cannot be
+        // read back to check it is the right one.
+        Text(
+            r.code.ifBlank { "—" },
+            style = Xau.type.body,
+            color = if (r.code.isBlank()) c.textMuted else c.green,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(Space.sm))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(prettyDate(r.claimedDate), style = Xau.type.caption, color = c.textSecondary)
+            Spacer(Modifier.weight(1f))
+            Text(
+                if (justCopied) "copiado" else "copiar",
+                style = if (justCopied) Xau.type.captionStrong else Xau.type.caption,
+                color = if (justCopied) c.green else c.textMuted,
+            )
+        }
+    }
+}
+
+// --------------------------------------------------------------- format
+
+/**
+ * `2026-07-28T18:24:59Z` as `28/07/2026 · 15:24` — in the phone's zone.
+ *
+ * The service writes UTC and the CSV keeps it that way, which is right
+ * for a file. On screen it is wrong: a code claimed at 15:24 reading
+ * 18:24 makes the user doubt it is theirs. Converted here, at the last
+ * possible moment, so the record on disk stays unambiguous.
+ *
+ * Anything that does not parse is shown exactly as written, rather than
+ * throwing inside a list item over a date.
+ */
+private fun prettyDate(iso: String): String {
+    if (iso.isBlank()) return "—"
+    return runCatching {
+        java.time.Instant.parse(iso)
+            .atZone(java.time.ZoneId.systemDefault())
+            .format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy · HH:mm"))
+    }.getOrDefault(iso)
+}
+
+private fun plural(n: Int, one: String, many: String): String = if (n == 1) one else many
 
 private fun prettyType(t: String?): String = when {
     t == null -> "Vantagem"

@@ -229,6 +229,16 @@ object Api {
         )
     }
 
+    /** Codes recorded for one offer, newest first, across all accounts. */
+    suspend fun offerCodes(offerId: String): List<OfferCode> =
+        arr("offer_codes", JSONObject().put("offerId", offerId)).map {
+            OfferCode(
+                gamertag = it.optString("gamertag"),
+                code = it.optString("code"),
+                claimedDate = it.optString("claimedDate"),
+            )
+        }
+
     // ------------------------------------------------------------ misc
 
     suspend fun publicIp(): String = obj("public_ip").getString("ip")
@@ -320,6 +330,13 @@ data class ClaimOffersResult(
     val claimed: List<ClaimedOffer>,
     val failures: List<String>,
     val indexCsv: String?,
+)
+
+data class OfferCode(
+    val gamertag: String,
+    /** The link or store token the claim minted. */
+    val code: String,
+    val claimedDate: String,
 )
 
 data class FarmTitle(val titleId: String, val name: String)

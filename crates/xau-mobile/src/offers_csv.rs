@@ -120,6 +120,85 @@ pub fn write_index() -> Result<PathBuf> {
     Ok(path)
 }
 
+/// One claimed row, as the detail view shows it.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct ClaimRow {
+    pub gamertag: String,
+    /// The link or store token this claim minted.
+    pub code: String,
+    pub claimed_date: String,
+}
+
+/// Every code recorded for one offer, across all accounts.
+///
+/// Read back from the CSVs rather than kept in memory: the files are the
+/// record. An account claimed on a previous run — or in a session that
+/// has since been signed out — still shows its code here, which is the
+/// whole reason the files are written before the UI is told anything.
+///
+/// # Errors
+/// Propagates filesystem failures. A single unreadable or malformed file
+/// is skipped rather than hiding every other account's code.
+pub fn rows_for_offer(offer_id: &str) -> Result<Vec<ClaimRow>> {
+    let dir = offers_dir()?;
+    let suffix = format!("_{offer_id}.csv");
+    let mut rows = Vec::new();
+    for entry in std::fs::read_dir(&dir)? {
+        let path = entry?.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.ends_with(&suffix) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if let Some(line) = text.lines().nth(1) {
+            if let Some(row) = parse_row(line) {
+                rows.push(row);
+            }
+        }
+    }
+    // Newest first: the code someone just claimed is the one they want.
+    rows.sort_by(|a, b| b.claimed_date.cmp(&a.claimed_date));
+    Ok(rows)
+}
+
+/// Split one CSV line back into fields, honouring RFC 4180 quoting.
+///
+/// Written rather than split(',') because a resource is a URL and may
+/// carry commas inside quotes — splitting naively would shift every
+/// field after it and show the wrong value as the code.
+fn parse_row(line: &str) -> Option<ClaimRow> {
+    let mut fields = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' if in_quotes && chars.peek() == Some(&'"') => {
+                cur.push('"');
+                chars.next();
+            }
+            '"' => in_quotes = !in_quotes,
+            ',' if !in_quotes => fields.push(std::mem::take(&mut cur)),
+            other => cur.push(other),
+        }
+    }
+    fields.push(cur);
+
+    // gamertag,xuid,offer_id,titulo,status,resource_type,resource,claimed_date,marketplace
+    if fields.len() < 8 {
+        return None;
+    }
+    Some(ClaimRow {
+        gamertag: fields[0].clone(),
+        code: fields[6].clone(),
+        claimed_date: fields[7].clone(),
+    })
+}
+
 const INDEX_NAME: &str = "_todas.csv";
 
 /// The column list, shared by both writers.
@@ -153,6 +232,57 @@ mod tests {
     #[test]
     fn a_plain_value_is_left_alone() {
         assert_eq!(field("39FEA8F9"), "39FEA8F9");
+    }
+
+    /// A quoted URL containing a comma must come back whole.
+    ///
+    /// Splitting on ',' would make the resource two fields and shift
+    /// every column after it, so the detail view would show a fragment
+    /// of the link as the code and the wrong value as the date.
+    #[test]
+    fn a_quoted_resource_with_a_comma_round_trips() {
+        let line = r#"xdzleo,2533,39FE,Discord Nitro,claimed,external-link,"https://x.test/a?b=1,2",2026-07-28T17:45:59Z,BR"#;
+        let row = parse_row(line).expect("parses");
+        assert_eq!(row.gamertag, "xdzleo");
+        assert_eq!(row.code, "https://x.test/a?b=1,2");
+        assert_eq!(row.claimed_date, "2026-07-28T17:45:59Z");
+    }
+
+    /// A truncated line is skipped, not read with shifted columns.
+    #[test]
+    fn a_short_line_is_rejected() {
+        assert!(parse_row("only,three,fields").is_none());
+    }
+
+    /// What write_offer emits must be what parse_row reads back.
+    #[test]
+    fn a_written_row_parses_back_to_the_same_values() {
+        let offer = Offer {
+            offer_id: "39FEA8F9".into(),
+            offer_status: "claimed".into(),
+            resource_type: Some("external-link".into()),
+            resource: Some("https://discord.com/x?a=1,2".into()),
+            claimed_date: Some("2026-07-28T17:45:59Z".into()),
+            claim_type: None,
+            marketplace_id: Some("BR".into()),
+        };
+        let mut out = String::from(HEADER);
+        let _ = writeln!(
+            out,
+            "{},{},{},{},{},{},{},{},{}",
+            field("xdzleo"),
+            field("2533"),
+            field(&offer.offer_id),
+            field("Discord Nitro"),
+            field(&offer.offer_status),
+            field(offer.resource_type.as_deref().unwrap_or("")),
+            field(offer.resource.as_deref().unwrap_or("")),
+            field(offer.claimed_date.as_deref().unwrap_or("")),
+            field(offer.marketplace_id.as_deref().unwrap_or("")),
+        );
+        let row = parse_row(out.lines().nth(1).expect("data line")).expect("parses");
+        assert_eq!(row.code, "https://discord.com/x?a=1,2");
+        assert_eq!(row.gamertag, "xdzleo");
     }
 
     /// The row must have exactly as many fields as the header names.
