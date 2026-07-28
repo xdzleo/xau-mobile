@@ -30,6 +30,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -59,6 +60,9 @@ fun LoginScreen(
     onError: (String) -> Unit,
 ) {
     val c = Xau.colors
+    // The WebView is a platform View, so it needs a plain ARGB int
+    // rather than a Compose Color.
+    val ink = c.ink.toArgb()
     val scope = rememberCoroutineScope()
     var url by remember { mutableStateOf<String?>(null) }
     var failure by remember { mutableStateOf<String?>(null) }
@@ -120,6 +124,13 @@ fun LoginScreen(
                         WebView(ctx).apply {
                             settings.javaScriptEnabled = true
                             settings.domStorageEnabled = true
+                            // A WebView is white underneath whatever it
+                            // renders. Microsoft's page does not fill the
+                            // viewport, so the bottom third of the screen
+                            // came out as a white slab in a dark app —
+                            // caught by looking at a screenshot, invisible
+                            // in the code.
+                            setBackgroundColor(ink)
                             // A fresh jar per sign-in, so adding a second
                             // account does not silently reuse the first
                             // account's Microsoft session.

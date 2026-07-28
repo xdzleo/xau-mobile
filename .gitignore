@@ -25,3 +25,6 @@ __pycache__/
 
 # Claude Code local runtime state
 .claude/
+
+# Screenshot captures from the review loop
+shots/
