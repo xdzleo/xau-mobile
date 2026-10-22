@@ -88,7 +88,7 @@ fun SettingsScreen(
                 contentAlignment = Alignment.Center,
             ) { Text("‹", style = Xau.type.hero, color = c.textPrimary) }
             Spacer(Modifier.width(Space.sm))
-            Text("Configurações", style = Xau.type.section, color = c.textPrimary)
+            Text("Ajustes", style = Xau.type.section, color = c.textPrimary)
         }
 
         Column(
