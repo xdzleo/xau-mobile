@@ -81,7 +81,9 @@ fun OffersScreen(onBack: () -> Unit) {
     var confirming by remember { mutableStateOf(false) }
     var claiming by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<ClaimOffersResult?>(null) }
-    var open by remember { mutableStateOf<OfferGroup?>(null) }
+    // The id, not the group: a claim from the detail reloads the list,
+    // and the detail must then show the counts that came back.
+    var openId by remember { mutableStateOf<String?>(null) }
 
     suspend fun load() {
         runCatching { Api.offersAll() }
@@ -91,21 +93,27 @@ fun OffersScreen(onBack: () -> Unit) {
 
     LaunchedEffect(Unit) { load() }
 
-    BackHandler { if (open != null) open = null else onBack() }
+    BackHandler { if (openId != null) openId = null else onBack() }
 
-    open?.let { group ->
-        OfferCodesScreen(group, onBack = { open = null }) {
+    val groups = remember(accounts) { group(accounts.orEmpty()) }
+
+    groups.find { it.offerId == openId }?.let { group ->
+        OfferCodesScreen(
+            group,
+            onBack = { openId = null },
+            onClaimed = { load() },
+        ) {
             clipboard.setText(AnnotatedString(it))
         }
         return
     }
 
-    val groups = remember(accounts) { group(accounts.orEmpty()) }
     val available = groups.sumOf { it.available }
     val failed = accounts.orEmpty().filter { it.error != null }
 
     if (confirming) {
         ClaimConfirmDialog(
+            title = "Resgatar $available vantagens?",
             count = available,
             accounts = accounts.orEmpty().size - failed.size,
             onConfirm = {
@@ -173,7 +181,7 @@ fun OffersScreen(onBack: () -> Unit) {
                         )
                     }
                 }
-                items(groups.size) { i -> OfferCard(groups[i]) { open = groups[i] } }
+                items(groups.size) { i -> OfferCard(groups[i]) { openId = groups[i].offerId } }
             }
         }
     }
@@ -284,6 +292,7 @@ private fun Header(
  */
 @Composable
 private fun ClaimConfirmDialog(
+    title: String,
     count: Int,
     accounts: Int,
     onConfirm: () -> Unit,
@@ -295,7 +304,7 @@ private fun ClaimConfirmDialog(
         containerColor = c.surfaceHigh,
         shape = RoundedCornerShape(Radius.card),
         title = {
-            Text("Resgatar $count vantagens?", style = Xau.type.section, color = c.textPrimary)
+            Text(title, style = Xau.type.section, color = c.textPrimary)
         },
         text = {
             Text(
@@ -422,11 +431,18 @@ private fun status(g: OfferGroup): String = when {
  * claiming writes before it reports.
  */
 @Composable
-private fun OfferCodesScreen(g: OfferGroup, onBack: () -> Unit, onCopy: (String) -> Unit) {
+private fun OfferCodesScreen(
+    g: OfferGroup,
+    onBack: () -> Unit,
+    onClaimed: suspend () -> Unit,
+    onCopy: (String) -> Unit,
+) {
     val c = Xau.colors
     val scope = rememberCoroutineScope()
     var rows by remember(g.offerId) { mutableStateOf<List<OfferCode>?>(null) }
     var error by remember(g.offerId) { mutableStateOf<String?>(null) }
+    var confirming by remember(g.offerId) { mutableStateOf(false) }
+    var claiming by remember(g.offerId) { mutableStateOf(false) }
     // Which row was just copied. Android 13 draws its own clipboard
     // bubble, but nothing below it does, and a tap that appears to do
     // nothing reads as a broken button.
@@ -435,10 +451,42 @@ private fun OfferCodesScreen(g: OfferGroup, onBack: () -> Unit, onCopy: (String)
     var notice by remember(g.offerId) { mutableStateOf<String?>(null) }
     val context = LocalContext.current
 
-    LaunchedEffect(g.offerId) {
+    suspend fun loadRows() {
         runCatching { Api.offerCodes(g.offerId) }
-            .onSuccess { rows = it }
+            .onSuccess { rows = it; error = null }
             .onFailure { error = it.message }
+    }
+
+    LaunchedEffect(g.offerId) { loadRows() }
+
+    // This reward only, on every account that still has it. The same
+    // irreversible claim as "Resgatar todas", so the same confirmation;
+    // the codes it mints land in the CSV first, then on this screen.
+    if (confirming) {
+        ClaimConfirmDialog(
+            title = "Resgatar ${g.title}?",
+            count = g.available,
+            accounts = g.available,
+            onConfirm = {
+                confirming = false
+                claiming = true
+                notice = null
+                scope.launch {
+                    runCatching { Api.claimOffersAll(g.offerId) }
+                        .onSuccess { r ->
+                            notice = when {
+                                r.failures.isNotEmpty() -> "falhou: ${r.failures.first()}"
+                                else -> plural(r.claimed.size, "1 resgate feito", "${r.claimed.size} resgates feitos")
+                            }
+                        }
+                        .onFailure { notice = "não deu para resgatar: ${it.message}" }
+                    loadRows()
+                    onClaimed()
+                    claiming = false
+                }
+            },
+            onDismiss = { confirming = false },
+        )
     }
 
     // The system's own save dialog. The CSVs live in the app's private
@@ -503,9 +551,40 @@ private fun OfferCodesScreen(g: OfferGroup, onBack: () -> Unit, onCopy: (String)
                         }
                         ?: "lendo o CSV…",
                     style = Xau.type.caption,
-                    color = if (notice != null) c.green else c.textSecondary,
+                    color = when {
+                        notice?.startsWith("falhou") == true ||
+                            notice?.startsWith("não deu") == true -> c.danger
+                        notice != null -> c.green
+                        else -> c.textSecondary
+                    },
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+
+        if (g.available > 0 || claiming) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Space.gutter)
+                    .height(Space.touch)
+                    .clip(RoundedCornerShape(Radius.control))
+                    .background(if (claiming) c.surfaceHigh else c.greenDeep)
+                    .clickable(enabled = !claiming) { confirming = true },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    when {
+                        claiming -> "Resgatando…"
+                        g.available == 1 -> "Resgatar"
+                        else -> "Resgatar em ${g.available} contas"
+                    },
+                    style = Xau.type.button,
+                    color = if (claiming) c.textMuted else c.onGreen,
+                )
+            }
+            Spacer(Modifier.height(Space.md))
         }
 
         // Both actions, side by side and equal. Neither fits beside a

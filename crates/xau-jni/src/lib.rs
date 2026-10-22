@@ -790,7 +790,11 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
             Ok(json!({ "fileName": csv.file_name, "text": csv.text }))
         }
 
+        // `offerId` narrows it to one reward, claimed on every account
+        // that still has it: what a tap on that reward's own screen
+        // means. Absent or empty, every available offer is claimed.
         "claim_offers_all" => {
+            let only = arg("offerId");
             let sessions: Vec<Arc<Session>> = {
                 let guard = state()
                     .lock()
@@ -812,7 +816,11 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
                         continue;
                     }
                 };
-                for offer in available.iter().filter(|o| o.is_available()) {
+                for offer in available
+                    .iter()
+                    .filter(|o| o.is_available())
+                    .filter(|o| only.is_empty() || o.offer_id == only)
+                {
                     // Serial: these are claims against one account under
                     // one IP, and a burst is what a rate limiter notices.
                     match xau_mobile::claim_offer(&s, &offer.offer_id).await {
