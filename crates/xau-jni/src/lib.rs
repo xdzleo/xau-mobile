@@ -665,12 +665,20 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
         }
 
         // ---- farm ----
-        "farm_titles" => Ok(Value::Array(
-            xau_mobile::farm_titles()
-                .into_iter()
-                .map(|(id, name)| json!({ "titleId": id, "name": name }))
-                .collect(),
-        )),
+        // With box art when an account is signed in to fetch it with;
+        // `image` is null otherwise, and the screen falls back to initials.
+        "farm_titles" => {
+            let art = match active_xuid().and_then(|x| session_of(&x)) {
+                Ok(s) => xau_mobile::farm_title_art(&s).await,
+                Err(_) => HashMap::new(),
+            };
+            Ok(Value::Array(
+                xau_mobile::farm_titles()
+                    .into_iter()
+                    .map(|(id, name)| json!({ "titleId": id, "name": name, "image": art.get(id) }))
+                    .collect(),
+            ))
+        }
 
         "farm_start" => {
             let xuid = if arg("xuid").is_empty() {

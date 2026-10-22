@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.xau.rewards.core.Account
 import com.xau.rewards.core.Api
 import com.xau.rewards.core.FarmState
+import com.xau.rewards.core.FarmTitle
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,6 +26,8 @@ data class UiState(
     val booting: Boolean = true,
     val accounts: List<Account> = emptyList(),
     val farm: FarmState? = null,
+    /** The farm's 8 titles with their box art; empty until loaded. */
+    val farmTitles: List<FarmTitle> = emptyList(),
     val publicIp: String? = null,
     val refreshing: Boolean = false,
     val claimingXuid: String? = null,
@@ -98,6 +101,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 // the notification must not outlive the last one.
                 if (rows.none { it.farming }) FarmService.stop(getApplication<Application>())
                 refreshFarm()
+                loadFarmTitles()
                 maybeAutoClaim()
             }
             .onFailure { e ->
@@ -223,6 +227,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 refresh(quiet = true)
             }
             .onFailure { e -> _state.update { it.copy(notice = e.message) } }
+    }
+
+    /**
+     * The farm's titles and their art. Asked again until the art has
+     * arrived: it needs a signed-in account, and a first launch has none.
+     */
+    private suspend fun loadFarmTitles() {
+        if (_state.value.farmTitles.any { it.image != null }) return
+        runCatching { Api.farmTitles() }
+            .onSuccess { t -> _state.update { it.copy(farmTitles = t) } }
     }
 
     private suspend fun refreshFarm() {

@@ -334,6 +334,24 @@ pub fn farm_titles() -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
+/// Box art for the farm's titles, `titleId -> image URL`.
+///
+/// Decoration: any failure is an empty map, never an error.
+pub async fn farm_title_art(session: &Session) -> std::collections::HashMap<String, String> {
+    let ids: Vec<String> = FIXED_CONSOLE_TITLES
+        .iter()
+        .map(|(id, _, _)| (*id).to_string())
+        .collect();
+    session
+        .client
+        .get_title_images(&ids)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(%e, "farm title art unavailable");
+            std::collections::HashMap::new()
+        })
+}
+
 /// Broadcast presence across the 8 fixed console titles for up to
 /// [`FARM_CYCLE`] (15 minutes), then stop on its own. Each ping's outcome
 /// (accepted / denied / rejected / not sent) is in the snapshot's

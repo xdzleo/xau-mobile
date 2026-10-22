@@ -175,7 +175,13 @@ object Api {
     // ------------------------------------------------------------ farm
 
     suspend fun farmTitles(): List<FarmTitle> =
-        arr("farm_titles").map { FarmTitle(it.getString("titleId"), it.getString("name")) }
+        arr("farm_titles").map {
+            FarmTitle(
+                titleId = it.getString("titleId"),
+                name = it.getString("name"),
+                image = if (it.isNull("image")) null else it.getString("image"),
+            )
+        }
 
     suspend fun farmStart(xuid: String) {
         obj("farm_start", JSONObject().put("xuid", xuid))
@@ -431,7 +437,8 @@ data class OfferCsvFile(
     val text: String,
 )
 
-data class FarmTitle(val titleId: String, val name: String)
+/** One of the farm's titles; `image` is its box art, when titlehub had one. */
+data class FarmTitle(val titleId: String, val name: String, val image: String? = null)
 
 data class FarmState(
     val state: String,

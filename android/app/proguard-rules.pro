@@ -7,3 +7,11 @@
 
 # Coil reflects over its own decoders.
 -dontwarn coil.**
+
+# The Windows sign-in page calls `XauLogin.postMessage` through a
+# JavaScript interface, found by name at runtime: keep every
+# @JavascriptInterface method, or the login silently never finishes.
+-keepattributes JavascriptInterface
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}

@@ -1,5 +1,6 @@
 package com.xau.rewards
 
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -46,6 +47,7 @@ import com.xau.rewards.ui.HomeScreen
 import com.xau.rewards.ui.LoginScreen
 import com.xau.rewards.ui.OffersScreen
 import com.xau.rewards.ui.StateBlock
+import com.xau.rewards.ui.entrance
 import com.xau.rewards.ui.theme.Radius
 import com.xau.rewards.ui.theme.Space
 import com.xau.rewards.ui.theme.Xau
@@ -71,6 +73,7 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
         )
         super.onCreate(savedInstanceState)
+        preferHighestRefreshRate()
 
         setContent {
             XauTheme {
@@ -136,6 +139,33 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    /**
+     * Ask for the panel's fastest mode (120 Hz on a moto g34) at the
+     * current resolution.
+     *
+     * Many phones run apps at 60 Hz unless the window says otherwise, so
+     * the scrolling and the farm's animations would never get the
+     * smoothness the screen has. Same resolution only: switching size
+     * would be a visible mode change, not a refresh-rate one.
+     */
+    private fun preferHighestRefreshRate() {
+        @Suppress("DEPRECATION")
+        val screen: android.view.Display = (
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display else windowManager.defaultDisplay
+            ) ?: return
+        val current = screen.mode
+        val best = screen.supportedModes
+            .filter {
+                it.physicalWidth == current.physicalWidth &&
+                    it.physicalHeight == current.physicalHeight
+            }
+            .maxByOrNull { it.refreshRate } ?: return
+        window.attributes = window.attributes.apply {
+            preferredDisplayModeId = best.modeId
+            preferredRefreshRate = best.refreshRate
+        }
+    }
 }
 
 /**
@@ -159,7 +189,7 @@ private fun Welcome(error: String?, onAdd: () -> Unit) {
         // a small block of grey text floating in a black void, with the
         // one action on it rendered as the quietest element present.
         Box(
-            Modifier.size(88.dp).clip(RoundedCornerShape(Radius.pill)).background(Color.White),
+            Modifier.entrance(0, rise = 24.dp).size(88.dp).clip(RoundedCornerShape(Radius.pill)).background(Color.White),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -179,8 +209,14 @@ private fun Welcome(error: String?, onAdd: () -> Unit) {
             },
             style = Xau.type.hero.copy(fontSize = Xau.type.brand.fontSize * 1.4f),
             color = c.textPrimary,
+            modifier = Modifier.entrance(1),
         )
-        Text("Jogos. Presença. Recompensas.", style = Xau.type.body, color = c.textSecondary)
+        Text(
+            "Jogos. Presença. Recompensas.",
+            style = Xau.type.body,
+            color = c.textSecondary,
+            modifier = Modifier.entrance(2),
+        )
 
         Spacer(Modifier.height(Space.huge))
 
@@ -199,6 +235,7 @@ private fun Welcome(error: String?, onAdd: () -> Unit) {
         // it.
         Box(
             Modifier
+                .entrance(4)
                 .fillMaxWidth()
                 .height(Space.touch + 6.dp)
                 .clip(RoundedCornerShape(Radius.control))

@@ -31,6 +31,7 @@ pub mod offers;
 // callers see a single flat API.
 pub mod retry;
 pub mod rewards;
+mod title_art;
 mod scan;
 pub mod unlock;
 
