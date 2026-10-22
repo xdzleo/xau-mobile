@@ -150,6 +150,10 @@ object Api {
 
     suspend fun refresh(): List<Account> = arr("refresh").toAccounts()
 
+    /** Freeze an account (no request goes out for it) or bring it back. */
+    suspend fun setFrozen(xuid: String, frozen: Boolean): List<Account> =
+        arr("set_frozen", JSONObject().put("xuid", xuid).put("frozen", if (frozen) "1" else "0")).toAccounts()
+
     suspend fun select(xuid: String) {
         obj("select", JSONObject().put("xuid", xuid))
     }
@@ -189,12 +193,60 @@ object Api {
     suspend fun storeSearch(query: String, cursor: String? = null): StorePage =
         obj("store_search", JSONObject().put("query", query).put("cursor", cursor ?: "")).toStorePage()
 
-    /** What is trending in the Store. */
-    suspend fun storeFeatured(): StorePage = obj("store_featured").toStorePage()
+    /** A Store list, a page at a time: trending, or the paid ones. */
+    suspend fun storeFeatured(paid: Boolean = false, cursor: String? = null): StorePage =
+        obj(
+            "store_featured",
+            JSONObject().put("list", if (paid) "TopPaid" else "TopTrending").put("cursor", cursor ?: ""),
+        ).toStorePage()
+
+    /**
+     * Search or a list, already filtered: the native side reads as many
+     * Store pages as the filter needs (cached for ten minutes) and hands
+     * back about [want] games that pass. Pass the page's cursor for more.
+     */
+    suspend fun storeBrowse(
+        query: String,
+        paid: Boolean,
+        cursor: String?,
+        microsoft: Boolean,
+        hideFree: Boolean,
+        min: Double?,
+        max: Double?,
+        want: Int = 36,
+    ): StorePage =
+        obj(
+            "store_browse",
+            JSONObject()
+                .put("query", query)
+                .put("list", if (paid) "TopPaid" else "TopTrending")
+                .put("cursor", cursor ?: "")
+                .put("microsoft", if (microsoft) "1" else "0")
+                .put("hideFree", if (hideFree) "1" else "0")
+                .put("min", min?.toString() ?: "")
+                .put("max", max?.toString() ?: "")
+                .put("want", want.toString()),
+        ).toStorePage()
+
+    /** Load the store's first screen into the native cache ahead of time. */
+    suspend fun storePrewarm() {
+        obj("store_prewarm")
+    }
 
     /** The Store's page for a product, where it is bought. */
     suspend fun storePurchaseUrl(productId: String): String =
         obj("store_purchase_url", JSONObject().put("productId", productId)).getString("url")
+
+    /** The checkout for a product, signed in as the active account. */
+    suspend fun storePurchaseForm(productId: String): PurchaseForm =
+        obj("store_purchase_form", JSONObject().put("productId", productId)).let { o ->
+            val f = o.getJSONArray("fields")
+            PurchaseForm(
+                host = o.getString("host"),
+                action = o.getString("action"),
+                fields = (0 until f.length()).map { f.getJSONArray(it).let { p -> p.getString(0) to p.getString(1) } },
+            )
+        }
 
     /** Every farm this process has run, from memory: no request is made. */
     suspend fun farmSummary(): List<FarmRun> =
@@ -208,6 +260,14 @@ object Api {
                 presence = if (it.isNull("presence")) null else it.getString("presence"),
             )
         }
+
+    /** Switch the farm to the next pool of games: (pool, pools), 1-based. */
+    suspend fun farmNextPool(): Pair<Int, Int> =
+        obj("farm_next_pool").let { it.getInt("pool") to it.getInt("pools") }
+
+    /** The farm's pool of games in use: (pool, pools), 1-based. */
+    suspend fun farmPool(): Pair<Int, Int> =
+        obj("farm_pool").let { it.getInt("pool") to it.getInt("pools") }
 
     suspend fun farmStart(xuid: String) {
         obj("farm_start", JSONObject().put("xuid", xuid))
@@ -230,6 +290,15 @@ object Api {
         )
     }
 
+    /**
+     * One account's Rewards level (1-3), read live. Null when the service
+     * did not report one, which is not the same as level 1.
+     */
+    suspend fun rewardsLevel(xuid: String): Long? =
+        obj("rewards", JSONObject().put("xuid", xuid)).let {
+            if (it.isNull("level")) null else it.getLong("level")
+        }
+
     /** One account's full mission list, read live. */
     suspend fun missions(xuid: String): List<Mission> =
         arr("missions", JSONObject().put("xuid", xuid)).map {
@@ -241,6 +310,29 @@ object Api {
                 progress = it.optInt("progress"),
                 done = it.optBoolean("done"),
                 open = it.optBoolean("open"),
+                description = it.optString("description"),
+                kind = it.optString("kind", "single"),
+                steps = it.optJSONArray("steps")?.let { a ->
+                    (0 until a.length()).map { i ->
+                        val s = a.getJSONObject(i)
+                        MissionStep(
+                            label = s.optString("label"),
+                            points = s.optLong("points"),
+                            done = s.optBoolean("done"),
+                            note = if (s.isNull("note")) null else s.optString("note"),
+                            image = if (s.isNull("image")) null else s.optString("image"),
+                        )
+                    }
+                }.orEmpty(),
+                current = if (it.isNull("current")) null else it.optInt("current"),
+                count = if (it.isNull("count")) null else it.optInt("count"),
+                target = if (it.isNull("target")) null else it.optInt("target"),
+                claimed = if (it.isNull("claimed")) null else it.optLong("claimed"),
+                locked = it.optBoolean("locked"),
+                requirement = if (it.isNull("requirement")) null else it.optString("requirement"),
+                failed = it.optBoolean("failed"),
+                thumbnail = if (it.isNull("thumbnail")) null else it.optString("thumbnail"),
+                resetDate = if (it.isNull("resetDate")) null else it.optString("resetDate"),
             )
         }
 
@@ -372,6 +464,11 @@ data class Account(
     val active: Boolean,
     /** Why this row's figures are missing, when they are. */
     val staleReason: String?,
+    /**
+     * Frozen by the user: the core sends nothing for it (no sign-in
+     * check, balance, claim or farm); its row is drawn from a cache.
+     */
+    val frozen: Boolean = false,
 )
 
 data class ClaimOutcome(val pointsAdded: Long, val accounts: List<Account>)
@@ -410,6 +507,33 @@ data class Mission(
     val progress: Int,
     val done: Boolean,
     val open: Boolean,
+    val description: String = "",
+    /** `streak` (day boxes), `pack` (games to play) or `single`. */
+    val kind: String = "single",
+    val steps: List<MissionStep> = emptyList(),
+    /** Index of today's box; null once finished, lost or locked. */
+    val current: Int? = null,
+    val count: Int? = null,
+    val target: Int? = null,
+    /** Points already credited ("Claimed ✓ 6"). */
+    val claimed: Long? = null,
+    val locked: Boolean = false,
+    val requirement: String? = null,
+    /** The week was lost: "Try again next week". */
+    val failed: Boolean = false,
+    /** The mission's own tile art. */
+    val thumbnail: String? = null,
+    /** ISO-8601 end of the period: the page's "9d left". */
+    val resetDate: String? = null,
+)
+
+data class MissionStep(
+    val label: String,
+    val points: Long,
+    val done: Boolean,
+    val note: String?,
+    /** Box art of the game that filled this pack slot. */
+    val image: String? = null,
 )
 
 data class Offer(
@@ -479,6 +603,9 @@ data class StoreProduct(
 )
 
 data class StorePage(val products: List<StoreProduct>, val cursor: String?)
+
+/** The checkout form: loaded from [host] so it posts with that origin. */
+data class PurchaseForm(val host: String, val action: String, val fields: List<Pair<String, String>>)
 
 private fun JSONObject.str(key: String): String? = if (isNull(key)) null else optString(key).ifEmpty { null }
 
@@ -557,5 +684,6 @@ private fun JSONArray.toAccounts(): List<Account> = map { o ->
         email = if (o.isNull("email")) null else o.getString("email"),
         active = o.optBoolean("active"),
         staleReason = if (o.isNull("staleReason")) null else o.getString("staleReason"),
+        frozen = o.optBoolean("frozen"),
     )
 }

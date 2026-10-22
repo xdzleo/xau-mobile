@@ -71,6 +71,50 @@ pub struct Mission {
     /// Human-facing label the service supplies: Available, Claimed, …
     pub label: String,
     pub progress: i64,
+    /// The service's one-line explanation, e.g. "Play 5 days this week
+    /// and increase your total."
+    pub description: String,
+    /// How the official page draws it: `streak` (a row of day boxes),
+    /// `pack` (a row of game covers to fill) or `single`.
+    pub kind: String,
+    /// One entry per day/tier box, in order. Empty for `single`.
+    pub steps: Vec<MissionStep>,
+    /// Index into `steps` of the box being worked on today. `None` once
+    /// the streak is finished, lost or locked.
+    pub current: Option<usize>,
+    /// Days/games done so far, when the mission counts something.
+    pub count: Option<i64>,
+    /// How many it takes.
+    pub target: Option<i64>,
+    /// Points already credited from this mission ("Claimed ✓ 6").
+    pub claimed_points: Option<i64>,
+    pub locked: bool,
+    /// What unlocks it, when locked ("Requires Game Pass subscription").
+    pub requirement: Option<String>,
+    /// The period was lost: the official page's "Try again next week".
+    pub failed: bool,
+    /// The mission's own tile art (`imageUris.tile`).
+    pub thumbnail: Option<String>,
+    /// When the period ends, ISO-8601 (`resetDate`) — the page's "9d left".
+    pub reset_date: Option<String>,
+}
+
+/// One box of a streak, or one game slot of a monthly pack — a `punch`
+/// in the service's own words.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MissionStep {
+    /// "Day 1", "5d", … Empty for a pack's game slots.
+    pub label: String,
+    /// Points that box pays. 0 for boxes the page leaves blank.
+    pub points: i64,
+    pub done: bool,
+    /// Extra line under the points, e.g. the "Next week 2x" multiplier.
+    pub note: Option<String>,
+    /// Title id of the game that filled a pack slot.
+    pub source_id: Option<String>,
+    /// That game's box art. Filled after parsing, from titlehub: the
+    /// Rewards payload names the game but carries no picture of it.
+    pub image: Option<String>,
 }
 
 impl Mission {
@@ -374,28 +418,7 @@ fn collect_missions(v: &serde_json::Value, out: &mut Vec<Mission>) {
     match v {
         serde_json::Value::Object(map) => {
             if map.contains_key("activityId") {
-                let s = |k: &str| {
-                    map.get(k)
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default()
-                        .to_string()
-                };
-                out.push(Mission {
-                    activity_id: s("activityId"),
-                    title: s("title"),
-                    points: map
-                        .get("rewardsPoints")
-                        .or_else(|| map.get("totalPoints"))
-                        .or_else(|| map.get("maximumBasePoints"))
-                        .and_then(serde_json::Value::as_i64)
-                        .unwrap_or(0),
-                    status: s("status"),
-                    label: s("statusLabel"),
-                    progress: map
-                        .get("progress")
-                        .and_then(serde_json::Value::as_i64)
-                        .unwrap_or(0),
-                });
+                out.push(parse_mission(map));
             }
             for val in map.values() {
                 collect_missions(val, out);
@@ -408,6 +431,156 @@ fn collect_missions(v: &serde_json::Value, out: &mut Vec<Mission>) {
         }
         _ => {}
     }
+}
+
+type Map = serde_json::Map<String, serde_json::Value>;
+
+/// First of `keys` holding a number, also accepting `"5"` and `5.0`.
+fn num(map: &Map, keys: &[&str]) -> Option<i64> {
+    keys.iter().find_map(|k| {
+        let v = map.get(*k)?;
+        v.as_i64()
+            .or_else(|| v.as_f64().map(|f| f.round() as i64))
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+    })
+}
+
+/// First of `keys` holding a non-empty string.
+fn text(map: &Map, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|k| {
+        map.get(*k)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn obj<'a>(map: &'a Map, key: &str) -> Option<&'a Map> {
+    map.get(key).and_then(serde_json::Value::as_object)
+}
+
+/// One activity, read the way the xbox.com Rewards page reads it.
+///
+/// Shapes taken from a real `programInfo` (Ultimate account, Oct 2026):
+///
+/// ```jsonc
+/// "displayTemplates": { "inline": "gallery" },      // basic | streakedPunchCard | gallery
+/// "progressInfo": { "completedSteps": 4, "totalSteps": 8 },
+/// "punchcard": { "punches": [                        // day boxes, or a pack's game slots
+///   { "text": "5d", "pointValue": 80, "hintText": "Next week 2x", "state": "active" },
+///   { "sourceType": "Title", "sourceId": "1938834516", "state": "punched" } ] },
+/// "streakLabels": ["Day 1", …], "streakAdditions": [6, 14, …], "currentStreak": 1,
+/// "status": "expired",                               // the week was lost
+/// "resetDate": "2026-11-01T05:00:00Z"
+/// ```
+///
+/// Login streaks (`resetsWhenBroken`) have no punchcard: their boxes are
+/// `streakLabels` paired with `streakAdditions`, filled up to
+/// `currentStreak`.
+fn parse_mission(map: &Map) -> Mission {
+    let s = |k: &str| text(map, &[k]).unwrap_or_default();
+    let status = s("status");
+    let is = |st: &str| status.eq_ignore_ascii_case(st);
+
+    let mut m = Mission {
+        activity_id: s("activityId"),
+        title: s("title"),
+        // The weekly streak pays 0 now and up to `maximumBasePoints`; the
+        // page's "+70" is the latter.
+        points: num(map, &["rewardsPoints"])
+            .filter(|p| *p > 0)
+            .or_else(|| num(map, &["maximumBasePoints", "totalPoints"]))
+            .unwrap_or(0),
+        label: s("statusLabel"),
+        progress: num(map, &["progress"]).unwrap_or(0).clamp(0, 100),
+        description: s("description"),
+        locked: is("locked"),
+        failed: is("expired") || is("failed"),
+        reset_date: text(map, &["resetDate"])
+            .or_else(|| obj(map, "dates").and_then(|d| text(d, &["resetDate"]))),
+        thumbnail: obj(map, "imageUris").and_then(|i| text(i, &["tile", "thumbnail"])),
+        kind: "single".into(),
+        ..Mission::default()
+    };
+    if m.locked {
+        m.requirement = obj(map, "powerUpStrings").and_then(|p| text(p, &["description"]));
+    }
+
+    let punches: Vec<&Map> = obj(map, "punchcard")
+        .and_then(|p| p.get("punches"))
+        .and_then(serde_json::Value::as_array)
+        .map(|a| a.iter().filter_map(serde_json::Value::as_object).collect())
+        .unwrap_or_default();
+    let labels: Vec<String> = map
+        .get("streakLabels")
+        .and_then(serde_json::Value::as_array)
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+
+    if !punches.is_empty() {
+        m.steps = punches
+            .iter()
+            .map(|p| MissionStep {
+                label: text(p, &["text"]).unwrap_or_default(),
+                points: num(p, &["pointValue"]).unwrap_or(0),
+                done: text(p, &["state"]).is_some_and(|st| st.eq_ignore_ascii_case("punched")),
+                note: text(p, &["hintText"]),
+                source_id: text(p, &["sourceId"]),
+                image: None,
+            })
+            .collect();
+    } else if !labels.is_empty() {
+        let adds: Vec<i64> = map
+            .get("streakAdditions")
+            .and_then(serde_json::Value::as_array)
+            .map(|a| a.iter().filter_map(serde_json::Value::as_i64).collect())
+            .unwrap_or_default();
+        let streak = usize::try_from(num(map, &["currentStreak"]).unwrap_or(0)).unwrap_or(0);
+        m.steps = labels
+            .into_iter()
+            .enumerate()
+            .map(|(i, label)| MissionStep {
+                label,
+                points: adds.get(i).copied().unwrap_or(0),
+                done: i < streak,
+                ..MissionStep::default()
+            })
+            .collect();
+    }
+
+    let inline = obj(map, "displayTemplates").and_then(|d| text(d, &["inline"]));
+    m.kind = match inline.as_deref() {
+        Some("gallery") => "pack",
+        _ if !m.steps.is_empty() => "streak",
+        _ => "single",
+    }
+    .into();
+
+    if m.kind == "single" {
+        let info = obj(map, "progressInfo");
+        m.count = info.and_then(|i| num(i, &["completedSteps"]));
+        m.target = info.and_then(|i| num(i, &["totalSteps"]));
+    } else {
+        // Count the boxes rather than trusting `progressInfo`: a login
+        // streak reports 1/1 for today while showing five days.
+        m.count = Some(m.steps.iter().filter(|s| s.done).count() as i64);
+        m.target = Some(m.steps.len() as i64);
+    }
+
+    // Today's box is outlined only while the period is still open.
+    let open = !(m.locked || m.failed || is("claimed") || is("completed"));
+    m.current = if open && m.kind != "single" {
+        m.steps.iter().position(|s| !s.done)
+    } else {
+        None
+    };
+
+    m.claimed_points = (is("claimed") || is("completed"))
+        .then(|| num(map, &["totalPoints", "rewardsPoints"]))
+        .flatten()
+        .filter(|p| *p > 0);
+    m
 }
 
 fn collect_pending(v: &serde_json::Value, out: &mut Vec<PendingActivity>) {
@@ -580,6 +753,108 @@ mod tests {
         let info = parse_program_info(&v);
         let sum: i64 = info.pending.iter().map(|a| a.points).sum();
         assert_eq!(sum, info.unclaimed);
+    }
+
+    fn mission(body: &str) -> Mission {
+        let v: serde_json::Value = serde_json::from_str(body).expect("json");
+        parse_mission(v.as_object().expect("object"))
+    }
+
+    /// Trimmed from a real `gamepassMonthly8Titles`: four games played,
+    /// each punch naming the title that filled it.
+    #[test]
+    fn monthly_pack_slots_name_the_games_played() {
+        let m = mission(
+            r#"{"activityId":"gamepassMonthly8Titles","title":"Game Pass monthly 8-pack",
+                "displayTemplates":{"details":"galleryDetails","inline":"gallery"},
+                "maximumBasePoints":280,"rewardsPoints":280,"totalPoints":560,
+                "status":"active","statusLabel":"Available","progress":50,
+                "resetDate":"2026-11-01T05:00:00Z",
+                "imageUris":{"background":"https://cms/bg.jpg","tile":"https://cms/tile.png"},
+                "progressInfo":{"completedSteps":4,"totalSteps":8},
+                "punchcard":{"cardType":"AllOrNothing","currentPunch":0,"punches":[
+                  {"pointValue":0,"sourceId":"1938834516","sourceType":"Title","state":"punched","text":null},
+                  {"pointValue":0,"sourceId":"1810111157","sourceType":"Title","state":"punched","text":null},
+                  {"pointValue":0,"sourceId":"2075317023","sourceType":"Title","state":"punched","text":null},
+                  {"pointValue":0,"sourceId":"1708767297","sourceType":"Title","state":"punched","text":null},
+                  {"pointValue":0,"sourceId":null,"sourceType":"Title","state":"active","text":null},
+                  {"pointValue":0,"sourceId":null,"sourceType":"Title","state":"active","text":null},
+                  {"pointValue":0,"sourceId":null,"sourceType":"Title","state":"active","text":null},
+                  {"pointValue":0,"sourceId":null,"sourceType":"Title","state":"active","text":null}]}}"#,
+        );
+        assert_eq!(m.kind, "pack");
+        assert_eq!(m.steps.len(), 8);
+        assert_eq!((m.count, m.target), (Some(4), Some(8)));
+        assert_eq!(m.current, Some(4), "slot 5 is the one outlined");
+        assert_eq!(m.steps[0].source_id.as_deref(), Some("1938834516"));
+        assert!(m.steps[4].source_id.is_none());
+        assert_eq!(m.points, 280);
+        assert_eq!(m.reset_date.as_deref(), Some("2026-11-01T05:00:00Z"));
+        assert_eq!(m.thumbnail.as_deref(), Some("https://cms/tile.png"));
+        assert!(m.is_open());
+    }
+
+    /// Real `gamePassWeekly`: 2 of 7 days, day 5 pays 80 and doubles
+    /// next week. It pays 0 so far; the page shows the maximum.
+    #[test]
+    fn weekly_streak_reads_its_punches() {
+        let m = mission(
+            r#"{"activityId":"gamePassWeekly","title":"Game Pass weekly streak",
+                "displayTemplates":{"inline":"streakedPunchCard"},
+                "maximumBasePoints":70,"rewardsPoints":0,"totalPoints":0,"status":"active",
+                "progressInfo":{"completedSteps":2,"totalSteps":7},
+                "punchcard":{"currentPunch":2,"punches":[
+                  {"pointValue":0,"state":"punched","text":"1d"},
+                  {"pointValue":0,"state":"punched","text":"2d"},
+                  {"pointValue":0,"state":"active","text":"3d"},
+                  {"pointValue":0,"state":"active","text":"4d"},
+                  {"hintText":"Next week 2x","pointValue":80,"state":"active","text":"5d"},
+                  {"pointValue":20,"state":"active","text":"6d"},
+                  {"pointValue":40,"state":"active","text":"7d"}]}}"#,
+        );
+        assert_eq!(m.kind, "streak");
+        assert_eq!(m.current, Some(2));
+        assert_eq!(m.steps[4].points, 80);
+        assert_eq!(m.steps[4].note.as_deref(), Some("Next week 2x"));
+        assert_eq!(m.points, 70);
+    }
+
+    /// Real `griffinLogin` (the mobile app): no punchcard, the boxes are
+    /// `streakLabels` + `streakAdditions` up to `currentStreak`.
+    #[test]
+    fn login_streak_uses_labels_and_additions() {
+        let m = mission(
+            r#"{"activityId":"griffinLogin","title":"Use the XBOX mobile app",
+                "displayTemplates":{"inline":"streakedPunchCard"},"currentStreak":1,
+                "rewardsPoints":2,"totalPoints":8,"status":"claimed","statusLabel":"Claimed",
+                "progressInfo":{"completedSteps":1,"totalSteps":1},
+                "streakAdditions":[6,14,22,30,48],
+                "streakLabels":["Day 1","Day 2","Day 3","Day 4","Day 5"],
+                "streakType":"resetsWhenBroken"}"#,
+        );
+        assert_eq!(m.kind, "streak");
+        assert_eq!(m.steps.len(), 5);
+        assert!(m.steps[0].done && !m.steps[1].done);
+        assert_eq!(m.steps[1].points, 14);
+        assert_eq!(m.current, None, "claimed today: nothing to outline");
+        assert_eq!(m.claimed_points, Some(8));
+    }
+
+    /// Real `pcWeeklyBonus` with `status: expired` — the page's
+    /// "Try again next week".
+    #[test]
+    fn an_expired_week_is_lost() {
+        let m = mission(
+            r#"{"activityId":"pcWeeklyBonus","title":"Weekly PC bonus",
+                "displayTemplates":{"inline":"streakedPunchCard"},
+                "rewardsPoints":110,"status":"expired",
+                "punchcard":{"punches":[
+                  {"pointValue":0,"state":"active","text":"Day 1"},
+                  {"pointValue":260,"state":"active","text":"Day 5"}]}}"#,
+        );
+        assert!(m.failed);
+        assert_eq!(m.current, None);
+        assert_eq!(m.points, 110);
     }
 
     #[test]

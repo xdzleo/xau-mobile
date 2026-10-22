@@ -38,6 +38,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
@@ -91,6 +92,8 @@ fun HomeScreen(
     onOpenOffers: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
     onRetry: () -> Unit = {},
+    onNextFarmPool: () -> Unit = {},
+    onToggleFrozen: (String) -> Unit = {},
 ) {
     val c = Xau.colors
     var pendingRemoval by remember { mutableStateOf<Account?>(null) }
@@ -140,7 +143,13 @@ fun HomeScreen(
                 if (state.farmTitles.isNotEmpty()) {
                     item {
                         Box(Modifier.entrance(2)) {
-                            FarmGamesCard(state.farmTitles, farming = state.accounts.any { it.farming })
+                            FarmGamesCard(
+                                state.farmTitles,
+                                farming = state.accounts.any { it.farming },
+                                pool = state.farmPool,
+                                pools = state.farmPools,
+                                onNextPool = onNextFarmPool,
+                            )
                         }
                     }
                 }
@@ -162,6 +171,7 @@ fun HomeScreen(
                                 onClaim = { onClaim(a.xuid) },
                                 onOpenStore = { onSelect(a.xuid); onOpenStore(a) },
                                 onOpenMissions = { onSelect(a.xuid); onOpenAccount(a) },
+                                onToggleFrozen = { onToggleFrozen(a.xuid) },
                             )
                         }
                     }
@@ -388,7 +398,13 @@ private fun ProgressRing(done: Int, total: Int) {
  * as what the presence looks like, not as a list to pick from.
  */
 @Composable
-private fun FarmGamesCard(titles: List<FarmTitle>, farming: Boolean) {
+private fun FarmGamesCard(
+    titles: List<FarmTitle>,
+    farming: Boolean,
+    pool: Int,
+    pools: Int,
+    onNextPool: () -> Unit,
+) {
     val c = Xau.colors
     Column(
         Modifier
@@ -409,11 +425,21 @@ private fun FarmGamesCard(titles: List<FarmTitle>, farming: Boolean) {
             Column(Modifier.weight(1f)) {
                 Text("Jogos do farm", style = Xau.type.section, color = c.textPrimary)
                 Text(
-                    "${titles.size} jogos de console · 15 min",
+                    "${titles.size} jogos Microsoft · pool $pool de $pools · 15 min",
                     style = Xau.type.caption,
                     color = c.textSecondary,
                 )
             }
+            // Next pool of eight games: 1 → 2 → 3 → 1.
+            Box(
+                Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(Radius.pill))
+                    .background(c.surfaceHigh)
+                    .clickable(onClick = onNextPool),
+                contentAlignment = Alignment.Center,
+            ) { Text("⟳", style = Xau.type.section, color = c.textPrimary) }
+            Spacer(Modifier.width(Space.sm))
             StatusPill(
                 text = if (farming) "Online" else "Parado",
                 live = farming,
@@ -544,12 +570,18 @@ private fun AccountCard(
     onClaim: () -> Unit,
     onOpenStore: () -> Unit,
     onOpenMissions: () -> Unit,
+    onToggleFrozen: () -> Unit,
 ) {
     val c = Xau.colors
     val haptics = LocalHapticFeedback.current
     val waiting = account.unclaimed ?: 0L
     val stale = account.staleReason != null
     val shape = RoundedCornerShape(Radius.card)
+
+    if (account.frozen) {
+        FrozenCard(account, onLongPress, onToggleFrozen)
+        return
+    }
 
     Column(
         Modifier
@@ -593,9 +625,23 @@ private fun AccountCard(
                         color = c.textMuted,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.copyOnTap(it),
                     )
                 }
             }
+            // Freeze: the account goes silent until tapped again.
+            Box(
+                Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(Radius.pill))
+                    .background(c.surfaceHigh)
+                    .clickable {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onToggleFrozen()
+                    },
+                contentAlignment = Alignment.Center,
+            ) { Text("❄", style = Xau.type.rowTitle, color = Color(0xFF8FD3FF)) }
+            Spacer(Modifier.width(Space.sm))
             // The farm switch lives per account, because the core keys
             // farms by xuid and each account earns on its own.
             Switch(
@@ -708,6 +754,58 @@ private fun AccountCard(
                 )
             }
         }
+    }
+}
+
+/**
+ * A frozen account: name and picture from the cache, and the way back.
+ * No balance or actions, because nothing is asked for it.
+ */
+@Composable
+private fun FrozenCard(account: Account, onLongPress: () -> Unit, onUnfreeze: () -> Unit) {
+    val c = Xau.colors
+    val ice = Color(0xFF8FD3FF)
+    val shape = RoundedCornerShape(Radius.card)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(Brush.verticalGradient(listOf(Color(0xFF14202B), c.surface)))
+            .border(1.dp, ice.copy(alpha = 0.35f), shape)
+            .pressableRow(onClick = {}, onLongClick = onLongPress)
+            .padding(Space.lg),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.alpha(0.5f)) { Avatar(account, farming = false) }
+        Spacer(Modifier.width(Space.md))
+        Column(Modifier.weight(1f)) {
+            Text(
+                account.gamertag.ifEmpty { account.xuid },
+                style = Xau.type.rowTitle,
+                color = c.textSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            // The balance from before it was frozen; refreshed on unfreeze.
+            account.balance?.let {
+                Text(
+                    "${money(it)} pontos · antes de congelar",
+                    style = Xau.type.captionStrong,
+                    color = c.textPrimary,
+                )
+            }
+            Text("❄ Congelada · nada é enviado", style = Xau.type.caption, color = ice)
+        }
+        Text(
+            "Descongelar",
+            style = Xau.type.button,
+            color = ice,
+            modifier = Modifier
+                .clip(RoundedCornerShape(Radius.pill))
+                .border(1.dp, ice.copy(alpha = 0.5f), RoundedCornerShape(Radius.pill))
+                .clickable(onClick = onUnfreeze)
+                .padding(horizontal = Space.md, vertical = Space.sm),
+        )
     }
 }
 

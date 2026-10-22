@@ -44,6 +44,14 @@ class FarmService : Service() {
     /** Accounts seen farming on the previous read. */
     private val running = mutableSetOf<String>()
 
+    /** Last Rewards level read per account; the first read is the baseline. */
+    private val levels = mutableMapOf<String, Long>()
+
+    /** Accounts that just finished: their level is read once more, then dropped. */
+    private val finishing = mutableSetOf<String>()
+
+    private val names = mutableMapOf<String, String>()
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
@@ -68,7 +76,10 @@ class FarmService : Service() {
             startForeground(NOTIFICATION_ID, first)
         }
         if (scope == null) {
-            scope = CoroutineScope(SupervisorJob() + Dispatchers.Main).also { it.launch { watch() } }
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Main).also {
+                it.launch { watch() }
+                it.launch { watchLevels() }
+            }
         }
         // START_STICKY: if Android reclaims the process under memory
         // pressure, bring it back — a farm that silently died is the
@@ -85,7 +96,11 @@ class FarmService : Service() {
             val farms = runCatching { Api.farmSummary() }.getOrNull()
             if (farms != null) {
                 for (f in farms) {
-                    if (f.xuid in running && f.completed && prefs.notifyWhenDone) notifyCompleted(f)
+                    f.gamertag?.let { names[f.xuid] = it }
+                    if (f.xuid in running && f.completed) {
+                        finishing += f.xuid
+                        if (prefs.notifyWhenDone) notifyCompleted(f)
+                    }
                 }
                 running.clear()
                 farms.filter { it.running }.forEach { running += it.xuid }
@@ -95,6 +110,9 @@ class FarmService : Service() {
                     // Twice in a row, so a farm being restarted between
                     // two reads does not take the service down.
                     if (++idleReads >= 2) {
+                        // The last minutes of a farm are the likeliest to
+                        // tip a level over; read once more before leaving.
+                        checkLevels()
                         stopSelf()
                         return
                     }
@@ -105,6 +123,45 @@ class FarmService : Service() {
             }
             delay(POLL_MS)
         }
+    }
+
+    /**
+     * Reads the Rewards level of every farming account once a minute and
+     * says so the moment one goes up. This one does make a request (one
+     * `programInfo` per account), hence the slower pace than [watch].
+     */
+    private suspend fun CoroutineScope.watchLevels() {
+        delay(2_000)
+        while (isActive) {
+            checkLevels()
+            delay(LEVEL_POLL_MS)
+        }
+    }
+
+    private suspend fun checkLevels() {
+        if (!prefs.notifyLevelUp) return
+        val ids = running + finishing
+        finishing.clear()
+        for (xuid in ids) {
+            val now = runCatching { Api.rewardsLevel(xuid) }.getOrNull() ?: continue
+            val before = levels.put(xuid, now)
+            if (before != null && now > before) notifyLevelUp(xuid, now)
+        }
+        // A finished account had its last read above; a later farm on it
+        // starts a fresh baseline.
+        levels.keys.retainAll(running)
+    }
+
+    private fun notifyLevelUp(xuid: String, level: Long) {
+        val who = names[xuid] ?: "Uma conta"
+        val n = Notification.Builder(this, LEVEL_CHANNEL_ID)
+            .setContentTitle("$who subiu para o nível $level")
+            .setContentText("Nível $level no Microsoft Rewards.")
+            .setSmallIcon(R.drawable.ic_xbox)
+            .setContentIntent(openApp())
+            .setAutoCancel(true)
+            .build()
+        manager().notify(LEVEL_ID_BASE + (xuid.hashCode() and 0xFFFF), n)
     }
 
     private fun progress(live: List<FarmRun>): Notification {
@@ -191,6 +248,13 @@ class FarmService : Service() {
                 NotificationManager.IMPORTANCE_DEFAULT,
             ),
         )
+        manager().createNotificationChannel(
+            NotificationChannel(
+                LEVEL_CHANNEL_ID,
+                getString(R.string.level_up_channel),
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ),
+        )
     }
 
     companion object {
@@ -200,6 +264,9 @@ class FarmService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val DONE_ID_BASE = 1_000
         private const val POLL_MS = 5_000L
+        private const val LEVEL_CHANNEL_ID = "level_up"
+        private const val LEVEL_ID_BASE = 2_000
+        private const val LEVEL_POLL_MS = 60_000L
 
         private fun clock(seconds: Long): String = "%d:%02d".format(seconds / 60, seconds % 60)
 
