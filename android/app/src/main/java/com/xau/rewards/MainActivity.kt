@@ -41,8 +41,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LifecycleResumeEffect
-import androidx.lifecycle.lifecycleScope
-import com.xau.rewards.core.Api
 import com.xau.rewards.ui.AccountDetail
 import com.xau.rewards.ui.HomeScreen
 import com.xau.rewards.ui.LoginScreen
@@ -53,7 +51,6 @@ import com.xau.rewards.ui.theme.Space
 import com.xau.rewards.ui.theme.Xau
 import com.xau.rewards.ui.theme.XauTheme
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -93,30 +90,17 @@ class MainActivity : ComponentActivity() {
                 Box(Modifier.fillMaxSize().background(Xau.colors.ink)) {
                     when {
                         loggingIn -> LoginScreen(
-                            onCode = { code ->
-                                lifecycleScope.launch {
-                                    runCatching { Api.finishLogin(code) }
-                                        .onSuccess { out ->
-                                            // Only leave the login screen
-                                            // once the exchange landed;
-                                            // dropping out first showed the
-                                            // empty state while the account
-                                            // was still on its way.
-                                            loggingIn = false
-                                            vm.onLoggedIn(out.accounts, out.warning)
-                                        }
-                                        .onFailure { e ->
-                                            // Was silently swallowed. A
-                                            // sign-in that failed after
-                                            // Microsoft accepted the
-                                            // password looked exactly like
-                                            // one that never happened.
-                                            loggingIn = false
-                                            vm.reportLoginFailure(e)
-                                        }
-                                }
+                            // Only leave the login screen once the exchange
+                            // landed; dropping out first showed the empty
+                            // state while the account was still on its way.
+                            onDone = { out ->
+                                loggingIn = false
+                                vm.onLoggedIn(out.accounts, out.warning)
                             },
                             onCancel = { loggingIn = false },
+                            // A sign-in that failed after Microsoft accepted
+                            // the password must not look like one that
+                            // never happened.
                             onError = { msg ->
                                 loggingIn = false
                                 vm.reportLoginFailure(Exception(msg))

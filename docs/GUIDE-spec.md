@@ -319,7 +319,7 @@ val band = when {
 
 **Assets** — `res/font/inter_variable.ttf`. In `res/values/colors.xml`, retarget `ink` to `#FF0A1220` and leave `brand` with a comment saying it is the launcher icon only and must never be read by Compose.
 
-**Copy** — `"8 títulos de console · ciclo de 16 min"`. The cycle is 15 minutes.
+**Copy** — `"8 títulos de console · até 15 min"` (fixed: it said `ciclo de 16 min`; a farm runs one 15-minute cycle, then ends).
 
 ---
 

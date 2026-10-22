@@ -1,0 +1,104 @@
+# Builds the APK: the Rust core for arm64 with the NDK, then Gradle.
+#
+# Signed with the release key when the repository has it as secrets
+# (ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS,
+# ANDROID_KEY_PASSWORD); without them it builds the debug APK, which
+# installs next to the released app (`com.xau.rewards.debug`). On a `v*`
+# tag the signed APK is attached to that tag's release.
+name: android
+
+on:
+  pull_request:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target-android"
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      # Where app/build.gradle.kts's syncNativeLibs looks for it:
+      # target-android/aarch64-linux-android/release/libxau_jni.so
+      - name: Build the Rust core (arm64)
+        env:
+          # .cargo/config.toml pins an x86-64 CPU for the desktop build;
+          # an empty RUSTFLAGS takes precedence over it.
+          RUSTFLAGS: ""
+          CARGO_TARGET_DIR: target-android
+        run: cargo ndk -t arm64-v8a --platform 24 build --release -p xau-jni
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Signing key
+        id: key
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > android/release.jks
+            {
+              echo "storeFile=release.jks"
+              echo "storePassword=$STORE_PASSWORD"
+              echo "keyAlias=$KEY_ALIAS"
+              echo "keyPassword=$KEY_PASSWORD"
+            } > android/keystore.properties
+            echo "task=assembleRelease" >> "$GITHUB_OUTPUT"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No release key in secrets: building the debug APK."
+            echo "task=assembleDebug" >> "$GITHUB_OUTPUT"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build the APK
+        working-directory: android
+        run: gradle --no-daemon ${{ steps.key.outputs.task }}
+
+      - name: Collect
+        run: |
+          mkdir out
+          cp android/app/build/outputs/apk/*/*.apk out/
+          rm -f android/release.jks android/keystore.properties
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: out/*.apk
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/') && steps.key.outputs.signed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          for f in out/*.apk; do
+            cp "$f" "xau-rewards-${tag}-arm64.apk"
+          done
+          gh release upload "$tag" "xau-rewards-${tag}-arm64.apk" --clobber

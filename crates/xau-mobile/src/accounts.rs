@@ -77,6 +77,14 @@ pub struct Store {
     /// accounts.json without it still loads.
     #[serde(default)]
     pub emails: BTreeMap<String, String>,
+    /// This install's MSA device account (see `windows_login`). One per
+    /// install, shared by every account, like a Windows PC's.
+    #[serde(default)]
+    pub device: Option<msa_device::Device>,
+    /// xuid -> the Windows sign-in behind it, from which a fresh xauth
+    /// is issued silently. Absent for accounts added the old way.
+    #[serde(default)]
+    pub windows: BTreeMap<String, msa_device::UserSession>,
 }
 
 /// The directory this app may write to.
@@ -142,6 +150,7 @@ impl Store {
 
     pub fn remove(&mut self, xuid: &str) -> bool {
         self.emails.remove(xuid);
+        self.windows.remove(xuid);
         self.tokens.remove(xuid).is_some()
     }
 
@@ -260,5 +269,41 @@ mod tests {
             ..Default::default()
         };
         assert!(a.balance.is_none() && a.unclaimed.is_none());
+    }
+
+    /// Stores written before the Windows sign-in must still load, with
+    /// their accounts intact and no device yet.
+    #[test]
+    fn a_store_from_before_the_windows_sign_in_still_loads() {
+        let old = r#"{"tokens":{"1":"XBL3.0 x=a;b"},"emails":{"1":"a@b.c"}}"#;
+        let s: Store = serde_json::from_str(old).expect("old store");
+        assert_eq!(s.tokens.len(), 1);
+        assert!(s.device.is_none() && s.windows.is_empty());
+    }
+
+    #[test]
+    fn removing_an_account_forgets_its_windows_sign_in() {
+        let mut s = Store::default();
+        s.put("1", "x");
+        s.windows.insert(
+            "1".into(),
+            msa_device::UserSession {
+                username: "a@b.c".into(),
+                puid: "p".into(),
+                sts: msa_device::StsToken {
+                    key_name: None,
+                    token: "t".into(),
+                    binary_secret: None,
+                    tpm_key: None,
+                    lifetime: msa_device::models::soap::Timestamp {
+                        id: None,
+                        created: String::new(),
+                        expires: String::new(),
+                    },
+                },
+            },
+        );
+        assert!(s.remove("1"));
+        assert!(s.windows.is_empty());
     }
 }

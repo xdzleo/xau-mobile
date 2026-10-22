@@ -194,6 +194,47 @@ impl XboxSignedClient {
         self.signed_post(consts::SISU_AUTH_URL, "", &body).await
     }
 
+    /// `POST https://device.auth.xboxlive.com/device/authenticate` with
+    /// `AuthMethod: RPS`: the device token of a registered Windows device,
+    /// from the device ticket of its MSA device account (see the
+    /// `msa-device` crate). Same request as xal's `get_device_token_rps`.
+    pub async fn request_device_token_rps(&self, rps_ticket: &str) -> Result<XboxAuthResponse> {
+        let body = RpsDeviceTokenRequestBody {
+            relying_party: consts::XBOX_AUTH_RELYING_PARTY,
+            token_type: "JWT",
+            properties: RpsDeviceTokenProperties {
+                auth_method: "RPS",
+                rps_ticket: rps_ticket.to_string(),
+                site_name: "user.auth.xboxlive.com",
+                version: "10.0.22621",
+                proof_key: self.signer.proof_key().clone(),
+            },
+        };
+        self.signed_post(consts::XBOX_DEVICE_AUTH_URL, "", &body)
+            .await
+    }
+
+    /// `POST https://sisu.xboxlive.com/authorize` for an RST2 user ticket,
+    /// which goes in as-is (no `t=` prefix). Same request as xal's
+    /// `sisu_authorize_rps`; an RPS device token is refused with a plain
+    /// MSA access token (401), it needs this device-bound ticket.
+    pub async fn sisu_auth_rps(
+        &self,
+        user_ticket: &str,
+        client_id: &str,
+        device_token: &str,
+    ) -> Result<XboxSisuResponse> {
+        let body = RpsSisuRequestBody {
+            access_token: user_ticket.to_string(),
+            app_id: client_id.to_string(),
+            device_token: device_token.to_string(),
+            sandbox: "RETAIL",
+            site_name: "user.auth.xboxlive.com",
+            proof_key: self.signer.proof_key().clone(),
+        };
+        self.signed_post(consts::SISU_AUTH_URL, "", &body).await
+    }
+
     /// Runs the full device → SISU flow for the given Microsoft access token
     /// and returns a ready-to-use `XBL3.0 x=…;…` header value along with the
     /// full SISU response (for callers that want the events-token path).
@@ -318,6 +359,46 @@ struct SisuAuthRequestBody {
     site_name: &'static str,
     #[serde(rename = "RelyingParty")]
     relying_party: String,
+    #[serde(rename = "ProofKey")]
+    proof_key: ProofKey,
+}
+
+#[derive(Debug, Serialize)]
+struct RpsDeviceTokenRequestBody {
+    #[serde(rename = "RelyingParty")]
+    relying_party: &'static str,
+    #[serde(rename = "TokenType")]
+    token_type: &'static str,
+    #[serde(rename = "Properties")]
+    properties: RpsDeviceTokenProperties,
+}
+
+#[derive(Debug, Serialize)]
+struct RpsDeviceTokenProperties {
+    #[serde(rename = "AuthMethod")]
+    auth_method: &'static str,
+    #[serde(rename = "RpsTicket")]
+    rps_ticket: String,
+    #[serde(rename = "SiteName")]
+    site_name: &'static str,
+    #[serde(rename = "Version")]
+    version: &'static str,
+    #[serde(rename = "ProofKey")]
+    proof_key: ProofKey,
+}
+
+#[derive(Debug, Serialize)]
+struct RpsSisuRequestBody {
+    #[serde(rename = "AccessToken")]
+    access_token: String,
+    #[serde(rename = "AppId")]
+    app_id: String,
+    #[serde(rename = "DeviceToken")]
+    device_token: String,
+    #[serde(rename = "Sandbox")]
+    sandbox: &'static str,
+    #[serde(rename = "SiteName")]
+    site_name: &'static str,
     #[serde(rename = "ProofKey")]
     proof_key: ProofKey,
 }

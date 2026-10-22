@@ -8,7 +8,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 
 /**
  * Keeps the process alive while the farm is running.
@@ -16,16 +18,32 @@ import android.os.IBinder
  * The farm itself lives in the Rust tokio runtime inside this process —
  * this service starts no work of its own. It exists because Android
  * freezes a backgrounded process within minutes of the screen going off,
- * and a presence farm on a 16-minute cycle would simply stop earning
+ * and a presence farm of up to 15 minutes would simply stop earning
  * without the user ever being told. A foreground service is the only
  * supported way to say "this process is doing something the user asked
  * for", and the notification is the honest disclosure that comes with it.
+ *
+ * A farm ends by itself after 15 minutes, often with the screen off and
+ * no UI polling, so the service also ends itself once the latest farm
+ * started can no longer be running: the notification never outlives it.
  */
 class FarmService : Service() {
 
+    private val handler = Handler(Looper.getMainLooper())
+    private val selfStop = Runnable { stopSelf() }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onDestroy() {
+        handler.removeCallbacks(selfStop)
+        super.onDestroy()
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Every start (another account's farm included) pushes the end
+        // back: each farm lasts FARM_MS, so the last one started ends last.
+        handler.removeCallbacks(selfStop)
+        handler.postDelayed(selfStop, FARM_MS + END_MARGIN_MS)
         // From API 34 the service type must be declared at start time as
         // well as in the manifest; the two-argument overload throws
         // MissingForegroundServiceTypeException there.
@@ -68,7 +86,7 @@ class FarmService : Service() {
 
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("Farm de presença ativo")
-            .setContentText("8 títulos de console · ciclo de 16 min")
+            .setContentText("8 títulos de console · até 15 min")
             .setSmallIcon(R.drawable.ic_xbox)
             .setContentIntent(open)
             .setOngoing(true)
@@ -78,6 +96,12 @@ class FarmService : Service() {
     companion object {
         private const val CHANNEL_ID = "farm"
         private const val NOTIFICATION_ID = 1
+
+        /** One farm run: `FARM_CYCLE` in xau-mobile (15 minutes, one cycle). */
+        private const val FARM_MS = 15 * 60_000L
+
+        /** Room for the last ping and the stop to land before the service goes. */
+        private const val END_MARGIN_MS = 60_000L
 
         fun start(context: Context) {
             val intent = Intent(context, FarmService::class.java)

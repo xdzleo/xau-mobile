@@ -519,6 +519,18 @@ private fun AccountRow(
         if (account.farming) {
             Spacer(Modifier.height(Space.md))
             MissionProgress(account)
+            // A farm whose pings Xbox refuses still fills its bar; say so,
+            // or the mission looks like it is counting when it is not.
+            farmPresenceProblem(account.farmPresence, account.farmPresenceHttp)?.let { why ->
+                Spacer(Modifier.height(Space.sm))
+                Text(
+                    why,
+                    style = Xau.type.caption,
+                    color = c.danger,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
 
         if (stale) {
@@ -782,6 +794,31 @@ private fun MissionProgress(account: Account) {
         }
     }
 }
+
+/**
+ * Why the farm's last ping did not register, in the user's words; null
+ * while Xbox accepts it (or before the first ping).
+ *
+ * A 403 is what an account signed in before the Windows sign-in gets:
+ * its token's device is not a Windows device. Signing in again fixes it.
+ */
+internal fun farmPresenceProblem(status: String?, http: Int?): String? {
+    val code = http?.let { " ($it)" }.orEmpty()
+    return when {
+        status == "denied" && http == 403 ->
+            "Xbox recusou a presença (403) — remova a conta e entre de novo"
+        else -> farmPresenceStatus(status, code)
+    }
+}
+
+private fun farmPresenceStatus(status: String?, code: String): String? =
+    when (status) {
+        "denied" -> "Xbox recusou a presença$code — o farm não está contando"
+        "rejected" -> "Xbox rejeitou a presença$code — o farm não está contando"
+        "not_sent" -> "Presença não enviada — sem conexão com a Xbox"
+        "unknown" -> "Xbox não confirmou a presença$code"
+        else -> null
+    }
 
 /** Seconds as `mm:ss`, counting down. */
 private fun clock(seconds: Long): String {

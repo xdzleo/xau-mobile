@@ -94,6 +94,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { Api.refresh() }
             .onSuccess { rows ->
                 _state.update { it.copy(accounts = rows, refreshing = false, fatal = null) }
+                // A farm runs for up to 15 minutes and then ends by itself;
+                // the notification must not outlive the last one.
+                if (rows.none { it.farming }) FarmService.stop(getApplication<Application>())
                 refreshFarm()
                 maybeAutoClaim()
             }

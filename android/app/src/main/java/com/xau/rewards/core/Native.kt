@@ -97,6 +97,50 @@ object Api {
         )
     }
 
+    // ---------------------------------------------- Windows sign-in
+
+    /**
+     * Open the Windows sign-in: what the WebView must load, with which
+     * headers, user agent and scripts. The first call registers this
+     * install as a Windows device with Microsoft (once, then stored).
+     */
+    suspend fun windowsLoginStart(): WindowsLoginPage {
+        val r = obj("windows_login_start")
+        val headers = r.getJSONArray("headers")
+        return WindowsLoginPage(
+            url = r.getString("url"),
+            headers = (0 until headers.length()).associate {
+                val pair = headers.getJSONArray(it)
+                pair.getString(0) to pair.getString(1)
+            },
+            userAgent = r.getString("user_agent"),
+            initScript = r.getString("init_script"),
+            finishScript = r.getString("finish_script"),
+            finishUrlPrefix = r.getString("finish_url_prefix"),
+            bridge = r.getString("bridge"),
+        )
+    }
+
+    /** Hand one bridge message from the page to the core. */
+    suspend fun windowsLoginMessage(body: String): LoginPageAction {
+        val r = obj("windows_login_message", JSONObject().put("body", body))
+        return when (r.getString("action")) {
+            "eval" -> LoginPageAction.Eval(r.getString("script"))
+            "open" -> LoginPageAction.Open(r.getString("url"))
+            "done" -> LoginPageAction.Done(
+                LoginOutcome(
+                    accounts = r.getJSONArray("accounts").toAccounts(),
+                    warning = if (r.isNull("warning")) null else r.getString("warning"),
+                ),
+            )
+            else -> LoginPageAction.Ignore
+        }
+    }
+
+    suspend fun windowsLoginCancel() {
+        obj("windows_login_cancel")
+    }
+
     suspend fun signOut(xuid: String): List<Account> =
         arr("sign_out", JSONObject().put("xuid", xuid)).toAccounts()
 
@@ -149,7 +193,8 @@ object Api {
             cycle = r.optLong("cycle"),
             pings = r.optLong("ping_count"),
             elapsedSecs = r.optLong("cycle_elapsed_secs"),
-            totalSecs = r.optLong("cycle_total_secs", 960L),
+            totalSecs = r.optLong("cycle_total_secs", 900L),
+            presence = r.optJSONObject("presence")?.optString("status")?.takeIf { it.isNotEmpty() },
         )
     }
 
@@ -278,6 +323,13 @@ data class Account(
     val farmPercent: Float? = null,
     val farmElapsed: Long? = null,
     val farmTotal: Long? = null,
+    /**
+     * This account's farm, last ping: accepted / denied / rejected /
+     * not_sent / unknown / pending. Null = no farm.
+     */
+    val farmPresence: String? = null,
+    /** HTTP status Xbox answered that ping with, when it answered. */
+    val farmPresenceHttp: Int? = null,
     /** How many activities are still earnable / already settled. */
     val missionsOpen: Int? = null,
     val missionsDone: Int? = null,
@@ -293,6 +345,28 @@ data class Account(
 data class ClaimOutcome(val pointsAdded: Long, val accounts: List<Account>)
 
 data class LoginOutcome(val accounts: List<Account>, val warning: String?)
+
+/** Everything the login WebView needs; see `windows_login.rs`. */
+data class WindowsLoginPage(
+    val url: String,
+    val headers: Map<String, String>,
+    val userAgent: String,
+    /** Run at the start of every document: wires `window.external`. */
+    val initScript: String,
+    /** Run once a page under [finishUrlPrefix] loads: hands over `ServerData`. */
+    val finishScript: String,
+    val finishUrlPrefix: String,
+    /** Name the JavaScript interface must be registered under. */
+    val bridge: String,
+)
+
+/** What the WebView does after the core read one page message. */
+sealed interface LoginPageAction {
+    data object Ignore : LoginPageAction
+    data class Eval(val script: String) : LoginPageAction
+    data class Open(val url: String) : LoginPageAction
+    data class Done(val outcome: LoginOutcome) : LoginPageAction
+}
 
 data class Mission(
     val id: String,
@@ -366,6 +440,8 @@ data class FarmState(
     val pings: Long,
     val elapsedSecs: Long,
     val totalSecs: Long,
+    /** Last ping's outcome: accepted / denied / rejected / not_sent / unknown / pending. */
+    val presence: String? = null,
 ) {
     val running: Boolean get() = state == "Farming" || state == "Pinging"
 }
@@ -391,6 +467,8 @@ private fun JSONArray.toAccounts(): List<Account> = map { o ->
         farmPercent = if (o.isNull("farmPercent")) null else o.getDouble("farmPercent").toFloat(),
         farmElapsed = if (o.isNull("farmElapsed")) null else o.getLong("farmElapsed"),
         farmTotal = if (o.isNull("farmTotal")) null else o.getLong("farmTotal"),
+        farmPresence = if (o.isNull("farmPresence")) null else o.getString("farmPresence"),
+        farmPresenceHttp = if (o.isNull("farmPresenceHttp")) null else o.getInt("farmPresenceHttp"),
         missionsOpen = if (o.isNull("missionsOpen")) null else o.getInt("missionsOpen"),
         missionsDone = if (o.isNull("missionsDone")) null else o.getInt("missionsDone"),
         gamepass = if (o.isNull("gamepass")) null else o.getString("gamepass"),

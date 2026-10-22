@@ -18,15 +18,19 @@ run a presence farm that earns more.
        │
        ▼
   xau-core    (rlib)     SISU, request signing, Rewards + presence APIs
+       │
+       ▼
+  msa-device  (rlib)     Windows-device MSA sign-in (vendored from xodus)
 ```
 
-## The three crates
+## The crates
 
 | Crate | Role | Open when… |
 |---|---|---|
 | **`xau-core`** | All logic: Xbox HTTP, auth, request signing, rewards, presence. No UI. | changing behaviour |
 | **`xau-mobile`** | The narrow surface the phone needs — sign in, read/claim Rewards, run the farm. Nothing else is reachable. | adding an operation |
 | **`xau-jni`** | The bridge. Owns the tokio runtime and the live sessions. | changing what Kotlin can call |
+| **`msa-device`** | Signing in as a Windows device: the MSA device account, RST2, the inline login. Vendored from [xodus](https://github.com/xodus-gaming/xodus) (GPL-3.0-or-later), the backend of the xodus-nexus Linux launcher. | Microsoft changes the Windows sign-in |
 
 `xau-core` is inherited from the desktop project and carries far more
 than this app uses (plan engine, bulk scanner, memory scanner). None of
@@ -75,22 +79,43 @@ the explicit `isNull` checks in the decoder.
 
 ## Sign-in
 
-No Xbox app required. The user completes Microsoft's own OAuth page in a
-WebView, and **every navigation is classified by Rust**, never by
-matching `?code=` in Kotlin: only the exact redirect endpoint is
-terminal, and treating any URL carrying a `code` as success would let a
-page reached mid-flow hand over a code to exchange.
+No Xbox app required. The phone signs in **as a Windows PC does**,
+because that is the only sign-in Xbox accepts the presence farm from:
+`presence-heartbeat` answers 403 to a token whose device is anonymous
+(the OAuth sign-in this app used before), whatever the client id, and
+200 to one whose device is a registered Windows device. It is the
+sign-in the xodus-nexus Linux launcher uses; the protocol code is
+vendored from its backend into `crates/msa-device`.
 
-After the code comes back, Xbox Live still requires a device token and a
-SISU authorisation, each signed with ECDSA P-256 over an undocumented
-byte layout. That lives in `xau_core::oauth::signer` and is the one part
-of this app that fails silently when it is wrong.
+1. **Once per install**, `windows_login::start` registers an MSA device
+   account (`deviceaddcredential.srf`) and stores it in `accounts.json`.
+2. The WebView loads Microsoft's **inline sign-in**
+   (`InlineLogin.srf`) with the headers and user agent of Windows' web
+   host. The page talks to its host through `window.external.notify`,
+   wired by a document-start script to the `XauLogin` JavaScript
+   interface; on `post.srf` the app hands Rust the page's `ServerData`
+   (a DA token). Kotlin only forwards messages and carries out Rust's
+   reply: run a script, open one more page, or finish.
+3. Rust trades the DA token over RST2, signed with the device's key, for
+   the user's long-lived **STS token**, stored per account.
+4. Every xauth is then issued silently: RST2 tickets for the Xbox app
+   (device and user), a device token with `AuthMethod: RPS`, and SISU.
+   So these accounts outlive the 16-hour xauth: `restore` mints a fresh
+   one on every launch.
+
+The device token and SISU requests are signed with ECDSA P-256 over an
+undocumented byte layout. That lives in `xau_core::oauth::signer` and is
+the one part of this app that fails silently when it is wrong.
+
+Accounts signed in the old way still load and work for Rewards; their
+farm shows "Xbox recusou a presença (403)", and signing in again fixes
+it.
 
 ## The farm and the foreground service
 
 The farm runs on the tokio runtime inside the app process. Android
 freezes a backgrounded process within minutes of screen-off, which would
-stop a 16-minute presence cycle without telling anyone — so `FarmService`
+stop a 15-minute presence farm without telling anyone — so `FarmService`
 holds a foreground notification for exactly as long as a farm runs. The
 service starts no work of its own.
 

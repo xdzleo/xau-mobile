@@ -150,6 +150,9 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6")
+    // Document-start scripts for the Windows sign-in page, which reports
+    // to `window.external` before any onPageStarted hook could set it.
+    implementation("androidx.webkit:webkit:1.12.1")
 
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")

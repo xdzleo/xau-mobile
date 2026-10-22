@@ -2,7 +2,7 @@
 resolver = "2"
 # The UI is a native Android app (see `android/`); Rust is reached
 # through the JNI bridge, so there is no Tauri shell any more.
-members = ["crates/xau-core", "crates/xau-mobile", "crates/xau-jni"]
+members = ["crates/xau-core", "crates/xau-mobile", "crates/xau-jni", "crates/msa-device"]
 
 [workspace.package]
 version = "2.15.0"

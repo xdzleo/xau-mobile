@@ -3,12 +3,13 @@
 Android app for **Microsoft Rewards on Xbox**. A cut-down fork of
 [xau-rs](https://github.com/xdzleo/xau-rs) that does four things:
 
-- **sign in** — Microsoft OAuth in a WebView, then Xbox Live SISU. No
-  Xbox app required.
+- **sign in** — as a Windows PC does: Microsoft's inline sign-in in a
+  WebView, on a registered Windows device, then Xbox Live SISU. No Xbox
+  app required, and the only sign-in Xbox accepts the presence farm from.
 - **Rewards** — balance and claimable activities, for several accounts
   at once
 - **claim** — on a tap, or automatically as soon as points appear
-- **presence farm** — 8 fixed console titles, 16-minute cycles
+- **presence farm** — 8 fixed console titles, for up to 15 minutes
 
 Everything else the desktop build carries is gone: the plan engine, the
 bulk achievement scanner, process-memory token extraction, the
