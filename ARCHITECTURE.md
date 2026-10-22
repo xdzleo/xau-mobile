@@ -129,21 +129,13 @@ the only spacing scale.
 ## Building
 
 ```bash
-./build-android.cmd build -p xau-jni --target aarch64-linux-android --release
+./build-apk.sh            # or build-apk.cmd; `install` also puts it on the phone
 ```
 
-Copy `target-android/aarch64-linux-android/release/libxau_jni.so` into
-`android/app/src/main/jniLibs/arm64-v8a/`, then:
-
-```bash
-./build-apk.cmd assembleDebug
-```
-
-Both wrapper scripts exist because neither toolchain is on `PATH`, and
-both fail confusingly without them: the NDK's per-target `*-clang.cmd`
-wrappers are batch files that choke on cargo's `-Wl,--version-script=`
-argument, and `JAVA_HOME` on this machine points at a JRE with no
-`javac`.
+`cargo ndk` builds the core (it drives the NDK's clang directly, so the
+NDK's batch-file wrappers that choke on `-Wl,--version-script=` never
+come into it), and Gradle's `syncNativeLibs` copies the `.so` into
+`jniLibs` itself. See README.md for the one-time toolchain setup.
 
 Only `arm64-v8a` is built. Every Android phone shipped since 2019 is
 arm64, and each extra ABI adds ~12 MB of Rust for devices this app will

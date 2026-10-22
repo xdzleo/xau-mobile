@@ -8,53 +8,67 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
+import com.xau.rewards.core.Api
+import com.xau.rewards.core.FarmRun
+import com.xau.rewards.core.Prefs
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 /**
- * Keeps the process alive while the farm is running.
+ * Keeps the process alive while a farm is running, and reports on it.
  *
  * The farm itself lives in the Rust tokio runtime inside this process —
  * this service starts no work of its own. It exists because Android
  * freezes a backgrounded process within minutes of the screen going off,
- * and a presence farm of up to 15 minutes would simply stop earning
- * without the user ever being told. A foreground service is the only
- * supported way to say "this process is doing something the user asked
- * for", and the notification is the honest disclosure that comes with it.
+ * and a 15-minute presence farm would simply stop earning without the
+ * user ever being told. A foreground service is the supported way to say
+ * "this process is doing something the user asked for".
  *
- * A farm ends by itself after 15 minutes, often with the screen off and
- * no UI polling, so the service also ends itself once the latest farm
- * started can no longer be running: the notification never outlives it.
+ * While it runs it reads the farms from memory every few seconds (no
+ * request is made): the ongoing notification shows the account, a
+ * progress bar and the time left, and an account that completes its 15
+ * minutes gets a notification of its own. When no farm is left running
+ * the service ends itself, so the notification never outlives the farm.
  */
 class FarmService : Service() {
 
-    private val handler = Handler(Looper.getMainLooper())
-    private val selfStop = Runnable { stopSelf() }
+    private var scope: CoroutineScope? = null
+    private val prefs by lazy { Prefs(this) }
+
+    /** Accounts seen farming on the previous read. */
+    private val running = mutableSetOf<String>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        handler.removeCallbacks(selfStop)
+        scope?.cancel()
+        scope = null
         super.onDestroy()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Every start (another account's farm included) pushes the end
-        // back: each farm lasts FARM_MS, so the last one started ends last.
-        handler.removeCallbacks(selfStop)
-        handler.postDelayed(selfStop, FARM_MS + END_MARGIN_MS)
+        createChannels()
         // From API 34 the service type must be declared at start time as
         // well as in the manifest; the two-argument overload throws
         // MissingForegroundServiceTypeException there.
+        val first = ongoing("Iniciando o farm…", null)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
                 NOTIFICATION_ID,
-                buildNotification(),
+                first,
                 android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
             )
         } else {
-            startForeground(NOTIFICATION_ID, buildNotification())
+            startForeground(NOTIFICATION_ID, first)
+        }
+        if (scope == null) {
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Main).also { it.launch { watch() } }
         }
         // START_STICKY: if Android reclaims the process under memory
         // pressure, bring it back — a farm that silently died is the
@@ -62,46 +76,132 @@ class FarmService : Service() {
         return START_STICKY
     }
 
-    private fun buildNotification(): Notification {
-        val manager = getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            manager.createNotificationChannel(
-                NotificationChannel(
-                    CHANNEL_ID,
-                    getString(R.string.farm_channel),
-                    // LOW: this is a persistent status, not an event.
-                    // Anything higher would buzz the phone for a farm
-                    // that is simply still running.
-                    NotificationManager.IMPORTANCE_LOW,
-                ).apply { setShowBadge(false) }
-            )
+    private suspend fun CoroutineScope.watch() {
+        // A farm is started right before the service, but give the core a
+        // moment so the first read already sees it.
+        delay(1_500)
+        var idleReads = 0
+        while (isActive) {
+            val farms = runCatching { Api.farmSummary() }.getOrNull()
+            if (farms != null) {
+                for (f in farms) {
+                    if (f.xuid in running && f.completed && prefs.notifyWhenDone) notifyCompleted(f)
+                }
+                running.clear()
+                farms.filter { it.running }.forEach { running += it.xuid }
+
+                val live = farms.filter { it.running }
+                if (live.isEmpty()) {
+                    // Twice in a row, so a farm being restarted between
+                    // two reads does not take the service down.
+                    if (++idleReads >= 2) {
+                        stopSelf()
+                        return
+                    }
+                } else {
+                    idleReads = 0
+                    manager().notify(NOTIFICATION_ID, progress(live))
+                }
+            }
+            delay(POLL_MS)
         }
+    }
 
-        val open = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE,
-        )
+    private fun progress(live: List<FarmRun>): Notification {
+        // The account closest to finishing leads the notification.
+        val lead = live.maxByOrNull { it.elapsed.toDouble() / it.total.coerceAtLeast(1) }!!
+        val left = (lead.total - lead.elapsed).coerceAtLeast(0)
+        val who = lead.gamertag ?: "Conta"
+        val title = if (live.size == 1) "$who · farm ativo" else "${live.size} contas farmando"
+        val text = "${clock(left)} restantes · 8 jogos" +
+            if (lead.presence == "denied" || lead.presence == "rejected") " · Xbox recusou a presença" else ""
+        return ongoing(title, text, lead.elapsed.toInt(), lead.total.toInt())
+    }
 
-        return Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("Farm de presença ativo")
-            .setContentText("8 títulos de console · até 15 min")
+    private fun ongoing(title: String, text: String?, done: Int = 0, total: Int = 0): Notification =
+        if (!prefs.ongoingNotification) quiet() else Notification.Builder(this, CHANNEL_ID)
+            .setContentTitle(title)
+            .apply { if (text != null) setContentText(text) }
             .setSmallIcon(R.drawable.ic_xbox)
-            .setContentIntent(open)
+            .setContentIntent(openApp())
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setProgress(total, done, total == 0)
             .build()
+
+    /**
+     * What Android still requires while a farm runs in the background with
+     * the ongoing notification switched off: minimised, no progress, and
+     * no status-bar icon (MIN channel).
+     */
+    private fun quiet(): Notification =
+        Notification.Builder(this, QUIET_CHANNEL_ID)
+            .setContentTitle("Farm em segundo plano")
+            .setSmallIcon(R.drawable.ic_xbox)
+            .setContentIntent(openApp())
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .build()
+
+    private fun notifyCompleted(f: FarmRun) {
+        val who = f.gamertag ?: "Uma conta"
+        val n = Notification.Builder(this, DONE_CHANNEL_ID)
+            .setContentTitle("$who completou o farm")
+            .setContentText("15 minutos em 8 jogos de console concluídos.")
+            .setSmallIcon(R.drawable.ic_check)
+            .setContentIntent(openApp())
+            .setAutoCancel(true)
+            .build()
+        // One notification per account, so two finishing together both show.
+        manager().notify(DONE_ID_BASE + (f.xuid.hashCode() and 0xFFFF), n)
+    }
+
+    private fun openApp(): PendingIntent = PendingIntent.getActivity(
+        this,
+        0,
+        Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+        PendingIntent.FLAG_IMMUTABLE,
+    )
+
+    private fun manager(): NotificationManager = getSystemService(NotificationManager::class.java)
+
+    private fun createChannels() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        manager().createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_ID,
+                getString(R.string.farm_channel),
+                // LOW: a persistent status, not an event. Anything higher
+                // would buzz the phone for a farm that is simply running.
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply { setShowBadge(false) },
+        )
+        manager().createNotificationChannel(
+            NotificationChannel(
+                QUIET_CHANNEL_ID,
+                getString(R.string.farm_quiet_channel),
+                NotificationManager.IMPORTANCE_MIN,
+            ).apply { setShowBadge(false) },
+        )
+        manager().createNotificationChannel(
+            NotificationChannel(
+                DONE_CHANNEL_ID,
+                getString(R.string.farm_done_channel),
+                // DEFAULT: this one IS an event the user is waiting for.
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ),
+        )
     }
 
     companion object {
         private const val CHANNEL_ID = "farm"
+        private const val DONE_CHANNEL_ID = "farm_done"
+        private const val QUIET_CHANNEL_ID = "farm_quiet"
         private const val NOTIFICATION_ID = 1
+        private const val DONE_ID_BASE = 1_000
+        private const val POLL_MS = 5_000L
 
-        /** One farm run: `FARM_CYCLE` in xau-mobile (15 minutes, one cycle). */
-        private const val FARM_MS = 15 * 60_000L
-
-        /** Room for the last ping and the stop to land before the service goes. */
-        private const val END_MARGIN_MS = 60_000L
+        private fun clock(seconds: Long): String = "%d:%02d".format(seconds / 60, seconds % 60)
 
         fun start(context: Context) {
             val intent = Intent(context, FarmService::class.java)

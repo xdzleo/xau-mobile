@@ -175,7 +175,39 @@ object Api {
     // ------------------------------------------------------------ farm
 
     suspend fun farmTitles(): List<FarmTitle> =
-        arr("farm_titles").map { FarmTitle(it.getString("titleId"), it.getString("name")) }
+        arr("farm_titles").map {
+            FarmTitle(
+                titleId = it.getString("titleId"),
+                name = it.getString("name"),
+                image = if (it.isNull("image")) null else it.getString("image"),
+            )
+        }
+
+    // ----------------------------------------------------------- store
+
+    /** Games matching [query]; pass the page's cursor for the next one. */
+    suspend fun storeSearch(query: String, cursor: String? = null): StorePage =
+        obj("store_search", JSONObject().put("query", query).put("cursor", cursor ?: "")).toStorePage()
+
+    /** What is trending in the Store. */
+    suspend fun storeFeatured(): StorePage = obj("store_featured").toStorePage()
+
+    /** The Store's page for a product, where it is bought. */
+    suspend fun storePurchaseUrl(productId: String): String =
+        obj("store_purchase_url", JSONObject().put("productId", productId)).getString("url")
+
+    /** Every farm this process has run, from memory: no request is made. */
+    suspend fun farmSummary(): List<FarmRun> =
+        arr("farm_summary").map {
+            FarmRun(
+                xuid = it.getString("xuid"),
+                gamertag = if (it.isNull("gamertag")) null else it.getString("gamertag"),
+                running = it.getBoolean("running"),
+                elapsed = it.optLong("elapsed"),
+                total = it.optLong("total"),
+                presence = if (it.isNull("presence")) null else it.getString("presence"),
+            )
+        }
 
     suspend fun farmStart(xuid: String) {
         obj("farm_start", JSONObject().put("xuid", xuid))
@@ -431,7 +463,57 @@ data class OfferCsvFile(
     val text: String,
 )
 
-data class FarmTitle(val titleId: String, val name: String)
+/** A game in the Microsoft Store. */
+data class StoreProduct(
+    val productId: String,
+    val title: String,
+    val publisher: String?,
+    val image: String?,
+    /** `R$ 249,00`, or `Gratuito`. */
+    val price: String?,
+    /** The price before a discount, when there is one. */
+    val was: String?,
+    /** `Xbox Game Pass` when a pass includes it. */
+    val pass: String?,
+    val rating: Double?,
+)
+
+data class StorePage(val products: List<StoreProduct>, val cursor: String?)
+
+private fun JSONObject.str(key: String): String? = if (isNull(key)) null else optString(key).ifEmpty { null }
+
+private fun JSONObject.toStorePage(): StorePage = StorePage(
+    products = getJSONArray("products").map {
+        StoreProduct(
+            productId = it.getString("product_id"),
+            title = it.getString("title"),
+            publisher = it.str("publisher"),
+            image = it.str("image"),
+            price = it.str("price"),
+            was = it.str("was"),
+            pass = it.str("pass"),
+            rating = if (it.isNull("rating")) null else it.optDouble("rating"),
+        )
+    },
+    cursor = str("cursor"),
+)
+
+/** One account's farm as the foreground service tracks it. */
+data class FarmRun(
+    val xuid: String,
+    val gamertag: String?,
+    val running: Boolean,
+    val elapsed: Long,
+    val total: Long,
+    /** accepted / denied / rejected / not_sent / unknown. */
+    val presence: String?,
+) {
+    /** Ran its whole cycle, as opposed to being switched off early. */
+    val completed: Boolean get() = !running && total > 0 && elapsed >= total - 5
+}
+
+/** One of the farm's titles; `image` is its box art, when titlehub had one. */
+data class FarmTitle(val titleId: String, val name: String, val image: String? = null)
 
 data class FarmState(
     val state: String,

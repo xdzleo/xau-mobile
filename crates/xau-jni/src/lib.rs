@@ -170,9 +170,19 @@ async fn restore_all() -> Value {
     let mut failures = HashMap::new();
     let mut renewed = false;
     for (xuid, xauth) in store.tokens.clone() {
-        // A Windows sign-in mints a fresh xauth (the stored one dies
-        // after ~16h); the stored xauth is only the fallback.
-        if let (Some(device), Some(user)) = (store.device.clone(), store.windows.get(&xuid).cloned()) {
+        // The stored xauth first: one validation call, so a launch shows
+        // the account in about a second. Only when it has died (~16h) does
+        // a Windows sign-in mint a fresh one, which takes four exchanges.
+        if store.windows.contains_key(&xuid) {
+            if let Ok(s) = xau_mobile::session_from_token(xauth.clone()).await {
+                let mut guard = state()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                guard.sessions.insert(s.xuid().to_string(), Arc::new(s));
+                continue;
+            }
+        }
+        if let (Some(device), Some(user)) = (store.device_of(&xuid).cloned(), store.windows.get(&xuid).cloned()) {
             match xau_mobile::windows_login::restore(&device, user).await {
                 Ok((s, user)) => {
                     store.put(&xuid, s.xauth());
@@ -266,7 +276,10 @@ async fn refresh_all() -> Value {
 ///
 /// `windows` is the Windows sign-in behind it, when there is one: kept so
 /// later launches mint a fresh xauth instead of trusting a stored one.
-async fn register_session(session: Session, windows: Option<xau_mobile::windows_login::UserSession>) -> Value {
+async fn register_session(
+    session: Session,
+    windows: Option<(xau_mobile::windows_login::UserSession, xau_mobile::windows_login::Device)>,
+) -> Value {
     let xuid = session.xuid().to_string();
 
     // Register the live session BEFORE touching disk. Persisting
@@ -283,16 +296,18 @@ async fn register_session(session: Session, windows: Option<xau_mobile::windows_
         store.put_email(&xuid, email);
     }
     match windows {
-        Some(user) => {
+        Some((user, device)) => {
             // The Windows sign-in names the account it signed in.
             if user.username.contains('@') {
                 store.put_email(&xuid, &user.username);
             }
             store.windows.insert(xuid.clone(), user);
+            store.devices.insert(xuid.clone(), device);
         }
         // Signing in again the old way replaces a Windows sign-in.
         None => {
             store.windows.remove(&xuid);
+            store.devices.remove(&xuid);
         }
     }
     {
@@ -359,8 +374,8 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
                 PageReply::Ignore => json!({ "action": "ignore" }),
                 PageReply::Eval(script) => json!({ "action": "eval", "script": script }),
                 PageReply::Open(url) => json!({ "action": "open", "url": url }),
-                PageReply::Done(session, user) => {
-                    let mut out = register_session(*session, Some(user)).await;
+                PageReply::Done(done) => {
+                    let mut out = register_session(done.session, Some((done.user, done.device))).await;
                     out["action"] = json!("done");
                     out
                 }
@@ -665,12 +680,55 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
         }
 
         // ---- farm ----
-        "farm_titles" => Ok(Value::Array(
-            xau_mobile::farm_titles()
-                .into_iter()
-                .map(|(id, name)| json!({ "titleId": id, "name": name }))
-                .collect(),
-        )),
+        // ---- Microsoft Store catalogue (public; no account needed) ----
+        "store_search" => {
+            let cursor = arg("cursor");
+            let page = xau_mobile::store::search(&arg("query"), Some(cursor.as_str())).await?;
+            Ok(serde_json::to_value(page)?)
+        }
+        "store_featured" => Ok(serde_json::to_value(xau_mobile::store::featured().await?)?),
+        "store_purchase_url" => Ok(json!({ "url": xau_mobile::store::purchase_url(&arg("productId")) })),
+
+        // Every farm this process has run, read from memory only: the
+        // foreground service polls this every few seconds for its
+        // notification, and must not cost a request each time.
+        "farm_summary" => {
+            let guard = state()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Ok(Value::Array(
+                guard
+                    .farms
+                    .iter()
+                    .map(|(xuid, h)| {
+                        let s = h.snapshot();
+                        json!({
+                            "xuid": xuid,
+                            "gamertag": guard.sessions.get(xuid).map(|s| s.gamertag().to_string()),
+                            "running": h.is_running(),
+                            "elapsed": s.cycle_elapsed_secs,
+                            "total": s.cycle_total_secs,
+                            "presence": s.presence.status,
+                        })
+                    })
+                    .collect(),
+            ))
+        }
+
+        // With box art when an account is signed in to fetch it with;
+        // `image` is null otherwise, and the screen falls back to initials.
+        "farm_titles" => {
+            let art = match active_xuid().and_then(|x| session_of(&x)) {
+                Ok(s) => xau_mobile::farm_title_art(&s).await,
+                Err(_) => HashMap::new(),
+            };
+            Ok(Value::Array(
+                xau_mobile::farm_titles()
+                    .into_iter()
+                    .map(|(id, name)| json!({ "titleId": id, "name": name, "image": art.get(id) }))
+                    .collect(),
+            ))
+        }
 
         "farm_start" => {
             let xuid = if arg("xuid").is_empty() {

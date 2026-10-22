@@ -18,6 +18,7 @@ android/keystore.properties
 android/*.jks
 *.jks
 *.keystore
+*.p12
 
 # Python
 __pycache__/

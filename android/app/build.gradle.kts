@@ -75,8 +75,8 @@ android {
         // built against the API 24 sysroot, which 26 satisfies.
         minSdk = 26
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.1.0"
+        versionCode = 4
+        versionName = "1.2.0"
 
         // Only arm64 by default. Every Android phone shipped since 2019
         // is arm64, and each extra ABI adds several MB of Rust to the
@@ -105,13 +105,13 @@ android {
             ndk { abiFilters += "x86_64" }
         }
         release {
-            // R8 is OFF for now, deliberately. Minification changes what
-            // actually ships, and this build has never been run on a
-            // device — an R8-stripped class would surface as a crash on
-            // launch that nobody could have caught first. Turn this on
-            // together with a real device test, not before.
-            isMinifyEnabled = false
-            isShrinkResources = false
+            // R8 on: Compose is markedly smoother optimised, which a
+            // 120 Hz panel shows. Turned on together with a device test
+            // (moto g34), as planned; what must survive renaming — the
+            // JNI class and the login's JavaScript interface — is kept in
+            // proguard-rules.pro.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
@@ -153,6 +153,10 @@ dependencies {
     // Document-start scripts for the Windows sign-in page, which reports
     // to `window.external` before any onPageStarted hook could set it.
     implementation("androidx.webkit:webkit:1.12.1")
+    // Real backdrop blur for the store's liquid-glass banner (RenderEffect
+    // on API 31+, a tinted scrim below). 1.2.x is the line built against
+    // Compose 1.7, which this app is on.
+    implementation("dev.chrisbanes.haze:haze:1.2.2")
 
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")

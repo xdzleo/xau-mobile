@@ -21,6 +21,7 @@
 
 pub mod accounts;
 pub mod offers_csv;
+pub mod store;
 pub mod windows_login;
 
 use std::time::Duration;
@@ -332,6 +333,24 @@ pub fn farm_titles() -> Vec<(&'static str, &'static str)> {
         .iter()
         .map(|(id, name, _)| (*id, *name))
         .collect()
+}
+
+/// Box art for the farm's titles, `titleId -> image URL`.
+///
+/// Decoration: any failure is an empty map, never an error.
+pub async fn farm_title_art(session: &Session) -> std::collections::HashMap<String, String> {
+    let ids: Vec<String> = FIXED_CONSOLE_TITLES
+        .iter()
+        .map(|(id, _, _)| (*id).to_string())
+        .collect();
+    session
+        .client
+        .get_title_images(&ids)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(%e, "farm title art unavailable");
+            std::collections::HashMap::new()
+        })
 }
 
 /// Broadcast presence across the 8 fixed console titles for up to

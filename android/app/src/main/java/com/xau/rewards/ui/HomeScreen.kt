@@ -1,23 +1,24 @@
 package com.xau.rewards.ui
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.runtime.LaunchedEffect
-import kotlinx.coroutines.delay
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -30,6 +31,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,12 +39,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
@@ -50,23 +56,27 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.xau.rewards.R
 import com.xau.rewards.UiState
 import com.xau.rewards.core.Account
+import com.xau.rewards.core.FarmTitle
 import com.xau.rewards.ui.theme.Radius
 import com.xau.rewards.ui.theme.Space
 import com.xau.rewards.ui.theme.Xau
+import kotlinx.coroutines.delay
 
 /**
- * The home screen: accounts, and nothing else.
+ * The home screen: the day at a glance, the farm's games, the accounts.
  *
- * The per-title presence list is gone. It listed eight fixed titles that
- * the user cannot choose and that every account farms identically — a
- * screenful of rows carrying one bit of information between them. The
- * farm switch belongs on the account, because that is the thing there is
- * more than one of and the thing the core actually keys farms by.
+ * Three blocks, in the order a user asks the questions: how much have I
+ * got (the hero), what is the farm playing (the games), and what is each
+ * account doing (the cards). The farm switch lives on the account card,
+ * because that is the thing there is more than one of and the thing the
+ * core keys farms by.
  */
 @Composable
 fun HomeScreen(
@@ -77,7 +87,9 @@ fun HomeScreen(
     onAddAccount: () -> Unit,
     onToggleFarm: (String) -> Unit,
     onOpenAccount: (Account) -> Unit = {},
+    onOpenStore: (Account) -> Unit = {},
     onOpenOffers: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
     onRetry: () -> Unit = {},
 ) {
     val c = Xau.colors
@@ -89,73 +101,95 @@ fun HomeScreen(
         }
     }
 
-    Column(
+    Box(
         Modifier
             .fillMaxSize()
-            .background(c.ink)
-            .windowInsetsPadding(WindowInsets.safeDrawing),
+            .background(c.ink),
     ) {
-        LazyColumn(
-            Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                start = Space.gutter,
-                end = Space.gutter,
-                top = Space.md,
-                bottom = Space.xxl,
-            ),
-            verticalArrangement = Arrangement.spacedBy(Space.lg),
-        ) {
-            item { Header(state) }
-            item { TodayCard(state) }
+        // The glow behind the header: the one place the brand colour is
+        // allowed to be atmosphere rather than signal.
+        // Vertical and ending fully transparent: a radial one cut off by
+        // the box's bottom edge drew a hard line across the list on the
+        // phone.
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(460.dp)
+                .background(
+                    Brush.verticalGradient(
+                        0f to c.greenDeep.copy(alpha = 0.42f),
+                        0.55f to c.greenDeep.copy(alpha = 0.12f),
+                        1f to Color.Transparent,
+                    ),
+                ),
+        )
 
-            item {
-                SectionHead(
-                    icon = R.drawable.ic_people,
-                    title = "Contas gerenciadas",
-                    subtitle = "Ligue para upar cada conta",
-                    actionLabel = "Atualizar",
-                    actionIcon = R.drawable.ic_refresh,
-                    onAction = onRetry,
-                )
+        Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+            LazyColumn(
+                Modifier.weight(1f).fillMaxWidth(),
+                contentPadding = PaddingValues(
+                    start = Space.gutter,
+                    end = Space.gutter,
+                    top = Space.md,
+                    bottom = Space.xxl,
+                ),
+                verticalArrangement = Arrangement.spacedBy(Space.lg),
+            ) {
+                item { Box(Modifier.entrance(0)) { TopBar(onRetry) } }
+                item { Box(Modifier.entrance(1)) { HeroCard(state) } }
+                if (state.farmTitles.isNotEmpty()) {
+                    item {
+                        Box(Modifier.entrance(2)) {
+                            FarmGamesCard(state.farmTitles, farming = state.accounts.any { it.farming })
+                        }
+                    }
+                }
+                item { Box(Modifier.entrance(3)) { AccountsHead(state.accounts.size, onAddAccount) } }
+
+                if (state.booting) {
+                    items(2) { AccountCardSkeleton() }
+                } else {
+                    items(state.accounts.size, key = { state.accounts[it].xuid }) { i ->
+                        val a = state.accounts[i]
+                        Box(Modifier.entrance(4 + i)) {
+                            AccountCard(
+                                account = a,
+                                titles = state.farmTitles,
+                                claiming = state.claimingXuid == a.xuid,
+                                onSelect = { onSelect(a.xuid); onOpenAccount(a) },
+                                onLongPress = { pendingRemoval = a },
+                                onToggleFarm = { onToggleFarm(a.xuid) },
+                                onClaim = { onClaim(a.xuid) },
+                                onOpenStore = { onSelect(a.xuid); onOpenStore(a) },
+                                onOpenMissions = { onSelect(a.xuid); onOpenAccount(a) },
+                            )
+                        }
+                    }
+                }
             }
 
-            if (state.booting) {
-                items(2) { AccountRowSkeleton() }
-            } else {
-                items(state.accounts.size) { i ->
-                    val a = state.accounts[i]
-                    AccountRow(
-                        account = a,
-                        claiming = state.claimingXuid == a.xuid,
-                        onSelect = { onSelect(a.xuid); onOpenAccount(a) },
-                        onLongPress = { pendingRemoval = a },
-                        onToggleFarm = { onToggleFarm(a.xuid) },
-                        onClaim = { onClaim(a.xuid) },
-                    )
-                }
-                item { AddAccountRow(onAddAccount) }
+            Box(Modifier.entrance(2, rise = 90.dp)) {
+                NavBar(onOpenOffers = onOpenOffers, onOpenSettings = onOpenSettings)
             }
         }
-
-        TabBar(onOpenOffers)
     }
 }
 
-// --------------------------------------------------------------- header
+// ------------------------------------------------------------- top bar
 
 @Composable
-private fun Header(state: UiState) {
+private fun TopBar(onRefresh: () -> Unit) {
     val c = Xau.colors
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Box(
-            Modifier.size(44.dp).clip(RoundedCornerShape(Radius.pill)).background(Color.White),
+            Modifier.size(40.dp).clip(RoundedCornerShape(Radius.pill)).background(Color.White),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 painterResource(R.drawable.ic_xbox),
                 contentDescription = null,
                 tint = c.greenDeep,
-                modifier = Modifier.size(30.dp),
+                modifier = Modifier.size(27.dp),
             )
         }
         Spacer(Modifier.width(Space.md))
@@ -168,129 +202,139 @@ private fun Header(state: UiState) {
                 style = Xau.type.brand,
                 color = c.textPrimary,
             )
-            Text(
-                "Jogos. Presença. Recompensas.",
-                style = Xau.type.caption,
-                color = c.textSecondary,
-            )
+            Text("Jogos. Presença. Recompensas.", style = Xau.type.caption, color = c.textSecondary)
         }
-        // The total across every account, which is the only figure that
-        // belongs in a header when the app is a multi-account tool.
-        Column(horizontalAlignment = Alignment.End) {
-            Text("TOTAL", style = Xau.type.caption, color = c.textMuted)
-            Text(money(state.totalBalance), style = Xau.type.rowFigure, color = c.textPrimary)
-        }
+        RoundIconButton(R.drawable.ic_refresh, "Atualizar", onRefresh)
     }
 }
 
-// ----------------------------------------------------------- today card
+@Composable
+private fun RoundIconButton(icon: Int, description: String, onClick: () -> Unit) {
+    val c = Xau.colors
+    Box(
+        Modifier
+            .size(Space.touch)
+            .clip(RoundedCornerShape(Radius.pill))
+            .background(c.surface)
+            .border(1.dp, c.outline, RoundedCornerShape(Radius.pill))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            painterResource(icon),
+            contentDescription = description,
+            tint = c.textPrimary,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+// ---------------------------------------------------------------- hero
 
 /**
- * The day's summary, expressed as level progress across the accounts.
- *
- * Rewards level is the thing being farmed for, so "how many are still on
- * level 1" is the question the summary should answer. Accounts whose
- * level could not be read are counted separately and never folded into
- * level 1 — those are different facts.
+ * The total, how many accounts are farming, and the three numbers worth
+ * acting on. One card, so the answer to "how am I doing" is one glance.
  */
 @Composable
-private fun TodayCard(state: UiState) {
+private fun HeroCard(state: UiState) {
     val c = Xau.colors
-    val lv1 = state.accounts.count { it.level == 1L }
-    val up = state.accounts.count { (it.level ?: 0L) >= 2L }
-    val unknown = state.accounts.count { it.level == null }
+    val total = state.accounts.size
     val farming = state.accounts.count { it.farming }
     val withGp = state.accounts.count { it.gamepass != null }
-    val total = state.accounts.size
+    val waiting = state.totalWaiting
+    val shape = RoundedCornerShape(Radius.card + 4.dp)
 
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(Radius.card))
-            .background(c.surface)
-            .border(1.dp, c.outline, RoundedCornerShape(Radius.card))
+            .clip(shape)
+            .background(
+                Brush.linearGradient(
+                    colors = listOf(Color(0xFF0E5A10), Color(0xFF0B2A0C), c.surface),
+                    start = Offset(0f, 0f),
+                    end = Offset(900f, 900f),
+                ),
+            )
+            .border(1.dp, c.green.copy(alpha = 0.35f), shape)
             .padding(Space.xl),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                painterResource(R.drawable.ic_clock),
-                contentDescription = null,
-                tint = c.green,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(Modifier.width(Space.sm))
-            Text("Resumo de hoje", style = Xau.type.section, color = c.textPrimary)
+            Column(Modifier.weight(1f)) {
+                Text("SALDO TOTAL", style = Xau.type.captionStrong, color = c.green)
+                Spacer(Modifier.height(Space.xs))
+                Text(
+                    if (state.booting) "—" else money(countUp(state.totalBalance)),
+                    style = Xau.type.hero,
+                    color = c.textPrimary,
+                    maxLines = 1,
+                )
+                Text(
+                    when (total) {
+                        0 -> "nenhuma conta conectada"
+                        1 -> "pontos em 1 conta"
+                        else -> "pontos em $total contas"
+                    },
+                    style = Xau.type.body,
+                    color = c.textSecondary,
+                )
+            }
+            Spacer(Modifier.width(Space.md))
+            ProgressRing(farming, total)
         }
 
         Spacer(Modifier.height(Space.lg))
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    if (state.booting) "—" else "$up",
-                    style = Xau.type.hero,
-                    color = c.textPrimary,
-                )
-                Text(
-                    if (up == 1) "conta upada" else "contas upadas",
-                    style = Xau.type.body,
-                    color = c.green,
-                )
-                Spacer(Modifier.height(Space.md))
-
-                LevelTally("Nível 1", lv1, c.textSecondary)
-                Spacer(Modifier.height(Space.xs))
-                LevelTally("Nível 2 ou 3", up, c.green)
-                if (withGp > 0 || total > 0) {
-                    Spacer(Modifier.height(Space.xs))
-                    LevelTally("com Game Pass", withGp, c.green)
-                }
-                if (unknown > 0) {
-                    Spacer(Modifier.height(Space.xs))
-                    // Never folded into level 1: "has not levelled up"
-                    // and "could not be read" are different facts, and
-                    // the whole point of this card is to tell them apart.
-                    LevelTally("Sem leitura", unknown, c.textMuted)
-                }
-            }
-
-            Spacer(Modifier.width(Space.lg))
-
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                ProgressRing(farming, total)
-                Spacer(Modifier.height(Space.md))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        if (farming == total && total > 0) "Todas farmando" else "Farmando",
-                        style = Xau.type.caption,
-                        color = c.textSecondary,
-                        textAlign = TextAlign.Center,
-                    )
-                    if (farming == total && total > 0) {
-                        Spacer(Modifier.width(Space.xs))
-                        Icon(
-                            painterResource(R.drawable.ic_check),
-                            contentDescription = null,
-                            tint = c.green,
-                            modifier = Modifier.size(16.dp),
-                        )
-                    }
-                }
-            }
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+            StatTile(
+                label = "Farmando",
+                value = "$farming/$total",
+                live = farming > 0,
+                modifier = Modifier.weight(1f),
+            )
+            StatTile(
+                label = "Game Pass",
+                value = "$withGp/$total",
+                modifier = Modifier.weight(1f),
+            )
+            StatTile(
+                label = "A resgatar",
+                value = money(waiting),
+                accent = waiting > 0,
+                modifier = Modifier.weight(1f),
+            )
         }
     }
 }
 
 @Composable
-private fun LevelTally(label: String, count: Int, tint: Color) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            Modifier.size(6.dp).clip(RoundedCornerShape(Radius.pill)).background(tint),
+private fun StatTile(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    live: Boolean = false,
+    accent: Boolean = false,
+) {
+    val c = Xau.colors
+    Column(
+        modifier
+            .clip(RoundedCornerShape(Radius.control))
+            .background(Color.Black.copy(alpha = 0.28f))
+            .padding(horizontal = Space.md, vertical = Space.md),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (live) {
+                LiveDot(active = true)
+                Spacer(Modifier.width(Space.xs))
+            }
+            Text(label, style = Xau.type.caption, color = c.textSecondary, maxLines = 1)
+        }
+        Spacer(Modifier.height(2.dp))
+        Text(
+            value,
+            style = Xau.type.rowFigure,
+            color = if (accent) c.green else c.textPrimary,
+            maxLines = 1,
         )
-        Spacer(Modifier.width(Space.sm))
-        Text("$count", style = Xau.type.captionStrong, color = tint)
-        Spacer(Modifier.width(Space.xs))
-        Text(label, style = Xau.type.caption, color = Xau.colors.textSecondary)
     }
 }
 
@@ -298,13 +342,18 @@ private fun LevelTally(label: String, count: Int, tint: Color) {
 private fun ProgressRing(done: Int, total: Int) {
     val c = Xau.colors
     val fraction = if (total == 0) 0f else done.toFloat() / total
-    Box(Modifier.size(132.dp), contentAlignment = Alignment.Center) {
+    val animated by animateFloatAsState(
+        targetValue = fraction,
+        animationSpec = tween(durationMillis = 700),
+        label = "ring",
+    )
+    Box(Modifier.size(104.dp), contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
-            val stroke = 12.dp.toPx()
+            val stroke = 10.dp.toPx()
             val inset = stroke / 2
             val arcSize = Size(size.width - stroke, size.height - stroke)
             drawArc(
-                color = c.surfaceHigh,
+                color = Color.Black.copy(alpha = 0.35f),
                 startAngle = 0f,
                 sweepAngle = 360f,
                 useCenter = false,
@@ -312,11 +361,11 @@ private fun ProgressRing(done: Int, total: Int) {
                 size = arcSize,
                 style = Stroke(width = stroke, cap = StrokeCap.Round),
             )
-            if (fraction > 0f) {
+            if (animated > 0f) {
                 drawArc(
-                    color = c.green,
+                    brush = Brush.sweepGradient(listOf(c.greenDeep, c.green, c.greenDeep)),
                     startAngle = -90f,
-                    sweepAngle = 360f * fraction,
+                    sweepAngle = 360f * animated,
                     useCenter = false,
                     topLeft = Offset(inset, inset),
                     size = arcSize,
@@ -326,142 +375,218 @@ private fun ProgressRing(done: Int, total: Int) {
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text("$done/$total", style = Xau.type.ringFigure, color = c.textPrimary)
-            Text("Contas", style = Xau.type.caption, color = c.textSecondary)
+            Text("no farm", style = Xau.type.caption, color = c.textSecondary)
         }
     }
 }
 
-// -------------------------------------------------------- section head
+// --------------------------------------------------------- farm games
 
+/**
+ * The eight titles the farm plays, with their real box art. They are not
+ * a choice — every farm plays the same eight — so they are shown once,
+ * as what the presence looks like, not as a list to pick from.
+ */
 @Composable
-private fun SectionHead(
-    icon: Int,
-    title: String,
-    subtitle: String,
-    actionLabel: String,
-    actionIcon: Int,
-    onAction: () -> Unit,
-) {
+private fun FarmGamesCard(titles: List<FarmTitle>, farming: Boolean) {
     val c = Xau.colors
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Icon(
-            painterResource(icon),
-            contentDescription = null,
-            tint = c.green,
-            modifier = Modifier.size(20.dp),
-        )
-        Spacer(Modifier.width(Space.md))
-        Column(Modifier.weight(1f)) {
-            Text(title, style = Xau.type.section, color = c.textPrimary)
-            Text(
-                subtitle,
-                style = Xau.type.caption,
-                color = c.textSecondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radius.card))
+            .background(c.surface)
+            .border(1.dp, c.outline, RoundedCornerShape(Radius.card))
+            .padding(Space.lg),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                painterResource(R.drawable.ic_pad),
+                contentDescription = null,
+                tint = c.green,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(Space.sm))
+            Column(Modifier.weight(1f)) {
+                Text("Jogos do farm", style = Xau.type.section, color = c.textPrimary)
+                Text(
+                    "${titles.size} jogos de console · 15 min",
+                    style = Xau.type.caption,
+                    color = c.textSecondary,
+                )
+            }
+            StatusPill(
+                text = if (farming) "Online" else "Parado",
+                live = farming,
             )
         }
-        Spacer(Modifier.width(Space.sm))
-        GhostButton(actionLabel, actionIcon, onAction, tint = c.green)
+
+        Spacer(Modifier.height(Space.lg))
+
+        titles.chunked(4).forEachIndexed { row, chunk ->
+            if (row > 0) Spacer(Modifier.height(Space.md))
+            Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+                chunk.forEach { t ->
+                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        GameArt(
+                            t,
+                            Modifier.fillMaxWidth().aspectRatio(1f),
+                            corner = Radius.control,
+                            dim = !farming,
+                        )
+                        Spacer(Modifier.height(Space.xs))
+                        Text(
+                            t.name,
+                            style = Xau.type.caption.copy(fontSize = 10.sp),
+                            color = c.textSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
+                // A short last row keeps its tiles the same width.
+                repeat(4 - chunk.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
     }
 }
 
 @Composable
-private fun GhostButton(label: String, icon: Int, onClick: () -> Unit, tint: Color? = null) {
+private fun StatusPill(text: String, live: Boolean) {
     val c = Xau.colors
     Row(
         Modifier
-            .clip(RoundedCornerShape(Radius.control))
-            .background(c.surface)
-            .border(1.dp, c.outline, RoundedCornerShape(Radius.control))
-            .clickable(onClick = onClick)
-            .padding(horizontal = Space.lg, vertical = Space.md),
+            .clip(RoundedCornerShape(Radius.pill))
+            .background(if (live) c.green.copy(alpha = 0.14f) else c.surfaceHigh)
+            .padding(horizontal = Space.md, vertical = Space.xs + 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            painterResource(icon),
-            contentDescription = null,
-            tint = tint ?: c.textSecondary,
-            modifier = Modifier.size(16.dp),
-        )
-        Spacer(Modifier.width(Space.sm))
-        Text(label, style = Xau.type.button, color = c.textPrimary, maxLines = 1)
+        LiveDot(active = live)
+        Spacer(Modifier.width(Space.xs + 2.dp))
+        Text(text, style = Xau.type.captionStrong, color = if (live) c.green else c.textMuted)
     }
 }
+
+/** Box art, or the title's initials on a tile when there is none. */
+@Composable
+private fun GameArt(title: FarmTitle, modifier: Modifier, corner: Dp, dim: Boolean = false) {
+    val c = Xau.colors
+    Box(
+        modifier
+            .clip(RoundedCornerShape(corner))
+            .background(c.surfaceHigh),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (title.image != null) {
+            AsyncImage(
+                model = title.image,
+                contentDescription = title.name,
+                contentScale = ContentScale.Crop,
+                alpha = if (dim) 0.55f else 1f,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Text(
+                initials(title.name),
+                style = Xau.type.captionStrong,
+                color = c.textSecondary,
+            )
+        }
+    }
+}
+
+private fun initials(name: String): String =
+    name.split(' ', ':', '-')
+        .filter { it.isNotBlank() && it[0].isLetterOrDigit() }
+        .take(2)
+        .joinToString("") { it.take(1).uppercase() }
 
 // ------------------------------------------------------------ accounts
 
 @Composable
-private fun AccountRow(
+private fun AccountsHead(count: Int, onAdd: () -> Unit) {
+    val c = Xau.colors
+    Row(
+        Modifier.fillMaxWidth().padding(top = Space.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Contas", style = Xau.type.section, color = c.textPrimary)
+        Spacer(Modifier.width(Space.sm))
+        Box(
+            Modifier
+                .clip(RoundedCornerShape(Radius.pill))
+                .background(c.surfaceHigh)
+                .padding(horizontal = Space.sm, vertical = 2.dp),
+        ) {
+            Text("$count", style = Xau.type.captionStrong, color = c.textSecondary)
+        }
+        Spacer(Modifier.weight(1f))
+        Text(
+            "+ Adicionar",
+            style = Xau.type.button,
+            color = c.green,
+            modifier = Modifier
+                .clip(RoundedCornerShape(Radius.pill))
+                .clickable(onClick = onAdd)
+                .padding(horizontal = Space.md, vertical = Space.sm),
+        )
+    }
+}
+
+@Composable
+private fun AccountCard(
     account: Account,
+    titles: List<FarmTitle>,
     claiming: Boolean,
     onSelect: () -> Unit,
     onLongPress: () -> Unit,
     onToggleFarm: () -> Unit,
     onClaim: () -> Unit,
+    onOpenStore: () -> Unit,
+    onOpenMissions: () -> Unit,
 ) {
     val c = Xau.colors
     val haptics = LocalHapticFeedback.current
     val waiting = account.unclaimed ?: 0L
     val stale = account.staleReason != null
+    val shape = RoundedCornerShape(Radius.card)
 
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(Radius.row))
-            .background(if (account.active) c.surfaceHigh else c.surface)
+            .clip(shape)
+            .background(
+                if (account.farming) {
+                    Brush.verticalGradient(listOf(Color(0xFF13261A), c.surface))
+                } else {
+                    Brush.verticalGradient(listOf(c.surface, c.surface))
+                },
+            )
             .border(
-                if (account.active) 1.5.dp else 1.dp,
-                if (account.active) c.green else c.outline,
-                RoundedCornerShape(Radius.row),
+                1.dp,
+                if (account.farming) c.green.copy(alpha = 0.55f) else c.outline,
+                shape,
             )
             .pressableRow(onClick = onSelect, onLongClick = onLongPress)
             .padding(Space.lg),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(48.dp).clip(RoundedCornerShape(Radius.pill)).background(c.surfaceHigh),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (account.gamerpic.isNotEmpty()) {
-                    AsyncImage(
-                        model = account.gamerpic,
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(Radius.pill)),
-                    )
-                } else {
-                    Text(
-                        account.gamertag.take(1).uppercase(),
-                        style = Xau.type.rowTitle,
-                        color = c.textSecondary,
-                    )
-                }
-            }
-
+            Avatar(account, farming = account.farming)
             Spacer(Modifier.width(Space.md))
-
             Column(Modifier.weight(1f)) {
-                Text(
-                    account.gamertag.ifEmpty { account.xuid },
-                    style = Xau.type.rowTitle,
-                    color = c.textPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(Modifier.height(Space.xs))
-                // Badges on their own line and the mission count below.
-                // Crowding all three onto one row let the Ultimate badge
-                // squeeze the count down to "8 p...", which is the kind
-                // of truncation that only shows up on a real handset.
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    LevelBadge(account.level, stale)
-                    account.gamepass?.let {
-                        Spacer(Modifier.width(Space.sm))
-                        GamePassBadge(it)
-                    }
+                    Text(
+                        account.gamertag.ifEmpty { account.xuid },
+                        style = Xau.type.rowTitle,
+                        color = c.textPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Spacer(Modifier.width(Space.sm))
+                    Gamerscore(account.gamerscore)
                 }
                 account.email?.let {
-                    Spacer(Modifier.height(Space.xs))
                     Text(
                         it,
                         style = Xau.type.caption,
@@ -470,29 +595,7 @@ private fun AccountRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                account.missionsOpen?.takeIf { it > 0 }?.let {
-                    Spacer(Modifier.height(Space.xs))
-                    Text(
-                        "$it missões pendentes",
-                        style = Xau.type.caption,
-                        color = c.textSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
             }
-
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    money(account.balance),
-                    style = Xau.type.rowFigure,
-                    color = if (stale) c.danger else c.textPrimary,
-                )
-                Text("pontos", style = Xau.type.caption, color = c.textMuted)
-            }
-
-            Spacer(Modifier.width(Space.md))
-
             // The farm switch lives per account, because the core keys
             // farms by xuid and each account earns on its own.
             Switch(
@@ -512,13 +615,53 @@ private fun AccountRow(
             )
         }
 
+        Spacer(Modifier.height(Space.md))
+
+        // Badges on their own line: crowding them next to the name let a
+        // long tier squeeze the gamertag down to "xd…" on a real handset.
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            LevelBadge(account.level, stale)
+            SubscriptionBadge(account)
+        }
+
+        Spacer(Modifier.height(Space.md))
+
+        Text(
+            money(countUp(account.balance)),
+            style = Xau.type.hero.copy(fontSize = 30.sp),
+            color = if (stale) c.danger else c.textPrimary,
+        )
+        Text("pontos Rewards", style = Xau.type.caption, color = c.textMuted)
+
+        Spacer(Modifier.height(Space.md))
+
+        // The account's two destinations, one tap each.
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+            CardAction(
+                icon = R.drawable.ic_store,
+                label = "Loja",
+                primary = true,
+                onClick = onOpenStore,
+                modifier = Modifier.weight(1f),
+            )
+            CardAction(
+                icon = R.drawable.ic_missions,
+                label = account.missionsOpen?.let { "Missões · $it" } ?: "Missões",
+                primary = false,
+                onClick = onOpenMissions,
+                modifier = Modifier.weight(1f),
+            )
+        }
+
         // The mission is "play 8 titles for 15 minutes"; the farm
         // broadcasts all eight at once, so one cycle IS the mission and
-        // its progress is the mission's progress. The bar lives inside
-        // the account banner because the farm is per account.
+        // its progress is the mission's progress.
         if (account.farming) {
-            Spacer(Modifier.height(Space.md))
-            MissionProgress(account)
+            Spacer(Modifier.height(Space.lg))
+            MissionProgress(account, titles)
             // A farm whose pings Xbox refuses still fills its bar; say so,
             // or the mission looks like it is counting when it is not.
             farmPresenceProblem(account.farmPresence, account.farmPresenceHttp)?.let { why ->
@@ -568,6 +711,110 @@ private fun AccountRow(
     }
 }
 
+/** A pill button on the account card: icon and label. */
+@Composable
+private fun CardAction(
+    icon: Int,
+    label: String,
+    primary: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val c = Xau.colors
+    val shape = RoundedCornerShape(Radius.control)
+    Row(
+        modifier
+            .height(Space.touch)
+            .clip(shape)
+            .background(
+                if (primary) {
+                    Brush.horizontalGradient(listOf(c.greenDeep, Color(0xFF168F16)))
+                } else {
+                    Brush.horizontalGradient(listOf(c.surfaceHigh, c.surfaceHigh))
+                },
+            )
+            .border(1.dp, if (primary) c.green.copy(alpha = 0.5f) else c.outline, shape)
+            .clickable(onClick = onClick),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            painterResource(icon),
+            contentDescription = null,
+            tint = if (primary) Color.White else c.textPrimary,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(Space.sm))
+        Text(label, style = Xau.type.button, color = if (primary) Color.White else c.textPrimary, maxLines = 1)
+    }
+}
+
+/** Gamerscore with the Xbox "G" mark. */
+@Composable
+private fun Gamerscore(score: Long) {
+    val c = Xau.colors
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            Modifier.size(16.dp).clip(RoundedCornerShape(Radius.pill)).background(c.textPrimary),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("G", style = Xau.type.captionStrong.copy(fontSize = 10.sp), color = c.ink)
+        }
+        Spacer(Modifier.width(Space.xs))
+        Text(money(countUp(score)), style = Xau.type.captionStrong, color = c.textPrimary)
+    }
+}
+
+/** Gamerpic in a ring that turns green while the account is farming. */
+@Composable
+private fun Avatar(account: Account, farming: Boolean) {
+    val c = Xau.colors
+    Box(contentAlignment = Alignment.BottomEnd) {
+        Box(
+            Modifier
+                .size(54.dp)
+                .clip(RoundedCornerShape(Radius.pill))
+                .background(
+                    if (farming) {
+                        Brush.sweepGradient(listOf(c.green, c.greenDeep, c.green))
+                    } else {
+                        Brush.linearGradient(listOf(c.outline, c.outline))
+                    },
+                )
+                .padding(2.5.dp)
+                .clip(RoundedCornerShape(Radius.pill))
+                .background(c.surfaceHigh),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (account.gamerpic.isNotEmpty()) {
+                AsyncImage(
+                    model = account.gamerpic,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(Radius.pill)),
+                )
+            } else {
+                Text(
+                    account.gamertag.take(1).uppercase(),
+                    style = Xau.type.rowTitle,
+                    color = c.textSecondary,
+                )
+            }
+        }
+        if (farming) {
+            Box(
+                Modifier
+                    .size(14.dp)
+                    .clip(RoundedCornerShape(Radius.pill))
+                    .background(c.ink)
+                    .padding(2.5.dp)
+                    .clip(RoundedCornerShape(Radius.pill))
+                    .background(c.green),
+            )
+        }
+    }
+}
+
 /**
  * The Rewards level, 1 to 3.
  *
@@ -588,132 +835,170 @@ private fun LevelBadge(level: Long?, stale: Boolean) {
         Modifier
             .clip(RoundedCornerShape(Radius.pill))
             .background(c.surfaceHigh)
-            .padding(horizontal = Space.sm, vertical = 2.dp),
+            .padding(horizontal = Space.sm + 2.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(5.dp).clip(RoundedCornerShape(Radius.pill)).background(tint))
-        Spacer(Modifier.width(Space.xs))
+        Box(Modifier.size(6.dp).clip(RoundedCornerShape(Radius.pill)).background(tint))
+        Spacer(Modifier.width(Space.xs + 1.dp))
         Text("Nível ${level ?: "—"}", style = Xau.type.captionStrong, color = tint)
     }
 }
 
 /**
- * Game Pass tier, when the account has one.
+ * The subscription, always stated once it is known.
  *
  * Read from `gamePassMembership` in the same programInfo response the
- * balance comes from, so it costs no extra request. Absent means no
- * membership — which is exactly why one of these accounts sits at level
- * 1 and cannot reach the Game Pass missions.
+ * balance comes from, so it costs no extra request. Before that read
+ * lands (balance still null) nothing is claimed either way; after it, an
+ * absent membership is said out loud as "Sem Game Pass" — which is
+ * exactly why such an account sits at level 1 and cannot reach the Game
+ * Pass missions.
  */
 @Composable
-private fun GamePassBadge(tier: String) {
+private fun SubscriptionBadge(account: Account) {
     val c = Xau.colors
-    Row(
-        Modifier
-            .clip(RoundedCornerShape(Radius.pill))
-            .background(c.greenDeep)
-            .padding(horizontal = Space.sm, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(prettyTier(tier), style = Xau.type.captionStrong, color = c.onGreen)
+    val tier = account.gamepass
+    when {
+        tier != null -> {
+            val ultimate = tier.contains("Ultimate", true)
+            Row(
+                Modifier
+                    .clip(RoundedCornerShape(Radius.pill))
+                    .background(
+                        if (ultimate) {
+                            Brush.horizontalGradient(listOf(Color(0xFF9BF00B), c.green))
+                        } else {
+                            Brush.horizontalGradient(listOf(c.greenDeep, c.greenDeep))
+                        },
+                    )
+                    .padding(horizontal = Space.sm + 2.dp, vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    painterResource(R.drawable.ic_xbox),
+                    contentDescription = null,
+                    tint = if (ultimate) c.ink else c.onGreen,
+                    modifier = Modifier.size(12.dp),
+                )
+                Spacer(Modifier.width(Space.xs + 1.dp))
+                Text(
+                    prettyTier(tier),
+                    style = Xau.type.captionStrong,
+                    color = if (ultimate) c.ink else c.onGreen,
+                )
+            }
+        }
+        account.balance != null -> Row(
+            Modifier
+                .clip(RoundedCornerShape(Radius.pill))
+                .border(1.dp, c.outline, RoundedCornerShape(Radius.pill))
+                .padding(horizontal = Space.sm + 2.dp, vertical = 2.dp),
+        ) {
+            Text("Sem Game Pass", style = Xau.type.captionStrong, color = c.textMuted)
+        }
+        else -> {}
     }
 }
 
-/** `GamePassUltimate` -> `Ultimate`, `PCGamePass` -> `PC`. */
+/** `GamePassUltimate` -> `Game Pass Ultimate`, `PCGamePass` -> `PC Game Pass`. */
 private fun prettyTier(tier: String): String = when {
-    tier.contains("Ultimate", true) -> "Ultimate"
-    tier.contains("PC", true) -> "GP PC"
-    tier.contains("Console", true) -> "GP Console"
-    tier.contains("Core", true) -> "GP Core"
-    tier.contains("Standard", true) -> "GP Standard"
+    tier.contains("Ultimate", true) -> "Game Pass Ultimate"
+    tier.contains("PC", true) -> "PC Game Pass"
+    tier.contains("Console", true) -> "Game Pass Console"
+    tier.contains("Core", true) -> "Game Pass Core"
+    tier.contains("Standard", true) -> "Game Pass Standard"
     else -> "Game Pass"
 }
 
 @Composable
-private fun AccountRowSkeleton() {
+private fun AccountCardSkeleton() {
     val c = Xau.colors
-    Row(
+    Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(Radius.row))
-            .background(c.surface)
-            .border(1.dp, c.outline, RoundedCornerShape(Radius.row))
-            .padding(Space.lg),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.size(48.dp).clip(RoundedCornerShape(Radius.pill)).background(c.surfaceHigh))
-        Spacer(Modifier.width(Space.md))
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
-            DotLeader(140.dp)
-            DotLeader(90.dp)
-        }
-    }
-}
-
-@Composable
-private fun AddAccountRow(onClick: () -> Unit) {
-    val c = Xau.colors
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(Radius.row))
-            .border(1.dp, c.outline, RoundedCornerShape(Radius.row))
-            .clickable(onClick = onClick)
-            .padding(vertical = Space.lg),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text("+ Adicionar conta", style = Xau.type.button, color = c.textSecondary)
-    }
-}
-
-// -------------------------------------------------------------- tabbar
-
-@Composable
-private fun TabBar(onOpenOffers: () -> Unit) {
-    val c = Xau.colors
-    // Only the first two lead anywhere; the rest are drawn but inert,
-    // and are marked as such rather than pretending to work.
-    val tabs = listOf(
-        Triple(R.drawable.ic_home, "Início", true),
-        Triple(R.drawable.ic_books, "Vantagens", true),
-        Triple(R.drawable.ic_bars, "Atividade", false),
-        Triple(R.drawable.ic_gear, "Configurações", false),
-    )
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Space.gutter, vertical = Space.sm)
             .clip(RoundedCornerShape(Radius.card))
             .background(c.surface)
             .border(1.dp, c.outline, RoundedCornerShape(Radius.card))
-            .padding(vertical = Space.md),
-        horizontalArrangement = Arrangement.SpaceEvenly,
+            .padding(Space.lg),
+        verticalArrangement = Arrangement.spacedBy(Space.md),
     ) {
-        tabs.forEachIndexed { i, (icon, label, live) ->
-            val selected = i == 0
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = if (i == 1) Modifier.clickable(onClick = onOpenOffers) else Modifier,
-            ) {
-                Icon(
-                    painterResource(icon),
-                    contentDescription = label,
-                    tint = if (selected) c.green else if (live) c.textSecondary else c.textMuted,
-                    modifier = Modifier.size(22.dp),
-                )
-                Spacer(Modifier.height(Space.xs))
-                Text(
-                    label,
-                    style = Xau.type.caption,
-                    color = if (selected) c.green else if (live) c.textSecondary else c.textMuted,
-                )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(54.dp).clip(RoundedCornerShape(Radius.pill)).background(c.surfaceHigh))
+            Spacer(Modifier.width(Space.md))
+            Column(verticalArrangement = Arrangement.spacedBy(Space.xs)) {
+                DotLeader(140.dp)
+                DotLeader(90.dp)
             }
         }
+        DotLeader(110.dp)
     }
 }
 
+// ------------------------------------------------------------- nav bar
+
 /**
- * How far this account is through the 8-titles-for-15-minutes mission.
+ * A floating bar with only what works: Início, Vantagens, Configurações.
+ * Adding an account lives in the accounts header, next to the list it
+ * adds to.
+ */
+@Composable
+private fun NavBar(onOpenOffers: () -> Unit, onOpenSettings: () -> Unit) {
+    val c = Xau.colors
+    val shape = RoundedCornerShape(Radius.pill)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Space.xxl, vertical = Space.sm)
+            .height(72.dp)
+            .clip(shape)
+            .background(Brush.verticalGradient(listOf(c.surfaceHigh, c.surface)))
+            .border(1.dp, c.outline, shape)
+            .padding(horizontal = Space.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        NavItem(R.drawable.ic_home, "Início", selected = true, onClick = {}, modifier = Modifier.weight(1f))
+        NavItem(R.drawable.ic_books, "Vantagens", selected = false, onClick = onOpenOffers, modifier = Modifier.weight(1f))
+        NavItem(R.drawable.ic_gear, "Configurações", selected = false, onClick = onOpenSettings, modifier = Modifier.weight(1f))
+    }
+}
+
+/** Icon over label; the selected one sits on a lit pill. */
+@Composable
+private fun NavItem(
+    icon: Int,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val c = Xau.colors
+    val tint = if (selected) c.green else c.textSecondary
+    Column(
+        modifier
+            .clip(RoundedCornerShape(Radius.control))
+            .clickable(onClick = onClick)
+            .padding(vertical = Space.xs),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            Modifier
+                .clip(RoundedCornerShape(Radius.pill))
+                .background(if (selected) c.green.copy(alpha = 0.16f) else Color.Transparent)
+                .padding(horizontal = Space.lg, vertical = Space.xs),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(painterResource(icon), contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
+        }
+        Spacer(Modifier.height(2.dp))
+        Text(label, style = Xau.type.captionStrong, color = tint, maxLines = 1)
+    }
+}
+
+// ------------------------------------------------------------- mission
+
+/**
+ * How far this account is through the 8-titles-for-15-minutes mission,
+ * with the eight titles it is playing right above the bar.
  *
  * The core only reports progress when the UI polls it, which is once a
  * minute — so drawing the snapshot directly would make the bar jump in
@@ -728,7 +1013,7 @@ private fun TabBar(onOpenOffers: () -> Unit) {
  * whole interaction.
  */
 @Composable
-private fun MissionProgress(account: Account) {
+private fun MissionProgress(account: Account, titles: List<FarmTitle>) {
     val c = Xau.colors
     val total = (account.farmTotal ?: 900L).coerceAtLeast(1L)
     val fix = account.farmElapsed ?: 0L
@@ -756,41 +1041,71 @@ private fun MissionProgress(account: Account) {
         label = "mission",
     )
 
-    Column {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radius.control))
+            .background(Color.Black.copy(alpha = 0.25f))
+            .padding(Space.md),
+    ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "Missão de 15 min · 8 jogos",
-                style = Xau.type.caption,
-                color = c.textMuted,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                "${(animated * 100).toInt()}%",
-                style = Xau.type.captionStrong,
-                color = c.green,
-            )
-            Spacer(Modifier.width(Space.sm))
-            Text(
-                clock(remaining),
-                style = Xau.type.captionStrong,
-                color = if (remaining == 0L) c.green else c.textSecondary,
-            )
+            if (titles.isNotEmpty()) {
+                TitleStrip(titles)
+                Spacer(Modifier.width(Space.sm))
+            }
+            Column(Modifier.weight(1f)) {
+                Text("Missão de 15 min", style = Xau.type.captionStrong, color = c.textPrimary)
+                Text("${titles.size.takeIf { it > 0 } ?: 8} jogos em presença", style = Xau.type.caption, color = c.textMuted)
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    clock(remaining),
+                    style = Xau.type.rowFigure,
+                    color = if (remaining == 0L) c.green else c.textPrimary,
+                )
+                Text("${(target * 100).toInt()}%", style = Xau.type.captionStrong, color = c.green)
+            }
         }
-        Spacer(Modifier.height(Space.sm))
+        Spacer(Modifier.height(Space.sm + 2.dp))
+        // Drawn, not laid out: the fill is read in the draw phase, so the
+        // bar advancing every frame never re-measures anything.
+        val fill = Brush.horizontalGradient(listOf(c.greenDeep, c.green))
+        val track = c.surfaceHigh
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(6.dp)
-                .clip(RoundedCornerShape(Radius.pill))
-                .background(c.surfaceHigh),
-        ) {
+                .height(8.dp)
+                .drawBehind {
+                    val r = CornerRadius(size.height / 2, size.height / 2)
+                    drawRoundRect(color = track, cornerRadius = r)
+                    val w = size.width * animated
+                    if (w > 0f) {
+                        drawRoundRect(brush = fill, size = Size(w, size.height), cornerRadius = r)
+                    }
+                },
+        )
+    }
+}
+
+/** The titles as overlapping tiles: a glance at what is being played. */
+@Composable
+private fun TitleStrip(titles: List<FarmTitle>) {
+    val c = Xau.colors
+    val shown = titles.take(8)
+    val tile = 26.dp
+    val step = 13.dp
+    Box(Modifier.width(tile + step * (shown.size - 1)).height(tile)) {
+        shown.forEachIndexed { i, t ->
             Box(
                 Modifier
-                    .fillMaxWidth(animated)
-                    .height(6.dp)
-                    .clip(RoundedCornerShape(Radius.pill))
-                    .background(c.green),
-            )
+                    .offset(x = step * i)
+                    .size(tile)
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(c.ink)
+                    .padding(1.5.dp),
+            ) {
+                GameArt(t, Modifier.fillMaxSize(), corner = 6.dp)
+            }
         }
     }
 }

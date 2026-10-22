@@ -2,4 +2,6 @@
 <resources>
     <string name="app_name">Xbox Rewards</string>
     <string name="farm_channel">Presença em jogos</string>
+    <string name="farm_done_channel">Farm concluído</string>
+    <string name="farm_quiet_channel">Farm em segundo plano (mínimo)</string>
 </resources>

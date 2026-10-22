@@ -8,7 +8,8 @@
 //! This is the sign-in the xodus / xodus-nexus Linux launcher uses,
 //! through the `msa-device` crate vendored from it:
 //!
-//! 1. once per install, an MSA device account (`deviceaddcredential.srf`);
+//! 1. on every sign-in, a new MSA device account (`deviceaddcredential.srf`),
+//!    kept by the account it signs in: each login is a new Windows device;
 //! 2. Windows' own "inline" sign-in page in the WebView, which hands its
 //!    host a DA token (`ServerData`), traded over RST2 for the user's
 //!    long-lived STS token, bound to that device;
@@ -25,12 +26,11 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use msa_device::{Device, LoginStep, PageMessage, StsToken, XBOX_APP_CLIENT_ID};
-pub use msa_device::UserSession;
+use msa_device::{LoginStep, PageMessage, StsToken, XBOX_APP_CLIENT_ID};
+pub use msa_device::{Device, UserSession};
 use xau_core::error::{Error, Result};
 use xau_core::oauth::XboxSignedClient;
 
-use crate::accounts::Store;
 use crate::Session;
 
 /// The JavaScript object the login page reports to. The host registers
@@ -64,11 +64,21 @@ pub enum PageReply {
     /// Load this URL in the same WebView (Microsoft wants one more page).
     Open(String),
     /// Signed in.
-    Done(Box<Session>, UserSession),
+    Done(Box<SignedIn>),
+}
+
+/// A finished sign-in: the live session, the credential to renew it
+/// with, and the device this sign-in registered (the account keeps it).
+pub struct SignedIn {
+    pub session: Session,
+    pub user: UserSession,
+    pub device: Device,
 }
 
 /// The sign-in in progress. One at a time: the WebView is modal.
 struct Pending {
+    /// Registered for this sign-in alone: every login is a new device.
+    device: Device,
     device_sts: StsToken,
     finish: bool,
     /// A finished sign-in is traded once; a second `ServerData` (a page
@@ -92,32 +102,21 @@ fn http() -> Result<reqwest::Client> {
         .build()?)
 }
 
-/// This install's device account, registering it the first time.
+/// Prepare the sign-in page.
 ///
 /// # Errors
-/// Fails when Microsoft refuses the registration, or when it cannot be
-/// stored: a device that is not kept would orphan every sign-in made
-/// through it.
-async fn ensure_device(http: &reqwest::Client) -> Result<Device> {
-    let mut store = Store::load();
-    if let Some(d) = store.device.clone() {
-        return Ok(d);
-    }
-    let device = msa_device::provision_device(http).await.map_err(err)?;
-    store.device = Some(device.clone());
-    store.save()?;
-    Ok(device)
-}
-
-/// Prepare the sign-in page.
+/// Every sign-in registers a NEW MSA device account, a new "Windows PC"
+/// with its own id, and the account it signs in keeps that device for
+/// good (see `accounts::Store::devices`). No two accounts, and no two
+/// sign-ins of the same account, share one.
 ///
 /// # Errors
 /// Fails when the device cannot be registered or signed in.
 pub async fn start() -> Result<LoginPage> {
     let http = http()?;
-    let device = ensure_device(&http).await?;
+    let device = msa_device::provision_device(&http).await.map_err(err)?;
     let device_sts = msa_device::authenticate_device(&http, &device).await.map_err(err)?;
-    *pending() = Some(Pending { device_sts, finish: false, busy: false });
+    *pending() = Some(Pending { device, device_sts, finish: false, busy: false });
 
     let correlation = msa_device::new_correlation_id();
     Ok(LoginPage {
@@ -148,7 +147,7 @@ pub async fn on_message(body: &str) -> Result<PageReply> {
         PageMessage::Token(da) => da,
     };
 
-    let (device_sts, finish) = {
+    let (device, device_sts, finish) = {
         let mut guard = pending();
         let p = guard
             .as_mut()
@@ -157,7 +156,7 @@ pub async fn on_message(body: &str) -> Result<PageReply> {
             return Ok(PageReply::Ignore);
         }
         p.busy = true;
-        (p.device_sts.clone(), p.finish)
+        (p.device.clone(), p.device_sts.clone(), p.finish)
     };
 
     let http = http()?;
@@ -178,12 +177,9 @@ pub async fn on_message(body: &str) -> Result<PageReply> {
         }
         LoginStep::Done(mut user) => {
             *pending() = None;
-            let device = Store::load()
-                .device
-                .ok_or_else(|| Error::other("dispositivo não registrado"))?;
             let xauth = issue_xauth(&device, &mut user).await?;
             let session = crate::session_from_token(xauth).await?;
-            Ok(PageReply::Done(Box::new(session), user))
+            Ok(PageReply::Done(Box::new(SignedIn { session, user, device })))
         }
     }
 }

@@ -1,11 +1,14 @@
 package com.xau.rewards
 
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -45,7 +48,10 @@ import com.xau.rewards.ui.AccountDetail
 import com.xau.rewards.ui.HomeScreen
 import com.xau.rewards.ui.LoginScreen
 import com.xau.rewards.ui.OffersScreen
+import com.xau.rewards.ui.SettingsScreen
+import com.xau.rewards.ui.StoreScreen
 import com.xau.rewards.ui.StateBlock
+import com.xau.rewards.ui.entrance
 import com.xau.rewards.ui.theme.Radius
 import com.xau.rewards.ui.theme.Space
 import com.xau.rewards.ui.theme.Xau
@@ -55,6 +61,23 @@ import kotlinx.coroutines.delay
 class MainActivity : ComponentActivity() {
 
     private val vm: AppViewModel by viewModels()
+
+    /**
+     * Android 13+ shows no notification at all until the user allows it,
+     * the farm's progress and its "completed" notice included. Asked when
+     * a farm is switched on, the moment the notifications start to matter.
+     */
+    private val notificationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+
+    private fun askForNotifications() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Called before setContent so the first frame already draws
@@ -71,13 +94,16 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
         )
         super.onCreate(savedInstanceState)
+        preferHighestRefreshRate()
 
         setContent {
             XauTheme {
                 val state by vm.state.collectAsStateWithLifecycle()
                 var loggingIn by remember { mutableStateOf(false) }
                 var openAccount by remember { mutableStateOf<String?>(null) }
+                var storeOf by remember { mutableStateOf<String?>(null) }
                 var showOffers by remember { mutableStateOf(false) }
+                var showSettings by remember { mutableStateOf(false) }
 
                 // Polling only while the screen is actually in front of
                 // the user; a background poll costs battery to refresh
@@ -109,10 +135,20 @@ class MainActivity : ComponentActivity() {
 
                         showOffers -> OffersScreen(onBack = { showOffers = false })
 
+                        showSettings -> SettingsScreen(onBack = { showSettings = false })
+
                         openAccount != null && state.accounts.any { it.xuid == openAccount } ->
                             AccountDetail(
                                 account = state.accounts.first { it.xuid == openAccount },
                                 onBack = { openAccount = null },
+                            )
+
+                        storeOf != null && state.accounts.any { it.xuid == storeOf } ->
+                            StoreScreen(
+                                account = state.accounts.first { it.xuid == storeOf },
+                                onBack = { storeOf = null },
+                                onOpenMissions = { openAccount = storeOf },
+                                onRefresh = { vm.refresh(quiet = true) },
                             )
 
                         !state.booting && !state.signedIn ->
@@ -124,9 +160,15 @@ class MainActivity : ComponentActivity() {
                             onSelect = vm::select,
                             onSignOut = vm::signOut,
                             onAddAccount = { loggingIn = true },
-                            onToggleFarm = vm::toggleFarm,
+                            onToggleFarm = { xuid ->
+                                val switchingOn = state.accounts.none { it.xuid == xuid && it.farming }
+                                if (switchingOn) askForNotifications()
+                                vm.toggleFarm(xuid)
+                            },
                             onOpenAccount = { openAccount = it.xuid },
+                            onOpenStore = { storeOf = it.xuid },
                             onOpenOffers = { showOffers = true },
+                            onOpenSettings = { showSettings = true },
                             onRetry = { vm.refresh() },
                         )
                     }
@@ -134,6 +176,33 @@ class MainActivity : ComponentActivity() {
                     state.notice?.let { Notice(it, vm::dismissNotice) }
                 }
             }
+        }
+    }
+
+    /**
+     * Ask for the panel's fastest mode (120 Hz on a moto g34) at the
+     * current resolution.
+     *
+     * Many phones run apps at 60 Hz unless the window says otherwise, so
+     * the scrolling and the farm's animations would never get the
+     * smoothness the screen has. Same resolution only: switching size
+     * would be a visible mode change, not a refresh-rate one.
+     */
+    private fun preferHighestRefreshRate() {
+        @Suppress("DEPRECATION")
+        val screen: android.view.Display = (
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display else windowManager.defaultDisplay
+            ) ?: return
+        val current = screen.mode
+        val best = screen.supportedModes
+            .filter {
+                it.physicalWidth == current.physicalWidth &&
+                    it.physicalHeight == current.physicalHeight
+            }
+            .maxByOrNull { it.refreshRate } ?: return
+        window.attributes = window.attributes.apply {
+            preferredDisplayModeId = best.modeId
+            preferredRefreshRate = best.refreshRate
         }
     }
 }
@@ -159,7 +228,7 @@ private fun Welcome(error: String?, onAdd: () -> Unit) {
         // a small block of grey text floating in a black void, with the
         // one action on it rendered as the quietest element present.
         Box(
-            Modifier.size(88.dp).clip(RoundedCornerShape(Radius.pill)).background(Color.White),
+            Modifier.entrance(0, rise = 24.dp).size(88.dp).clip(RoundedCornerShape(Radius.pill)).background(Color.White),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -179,8 +248,14 @@ private fun Welcome(error: String?, onAdd: () -> Unit) {
             },
             style = Xau.type.hero.copy(fontSize = Xau.type.brand.fontSize * 1.4f),
             color = c.textPrimary,
+            modifier = Modifier.entrance(1),
         )
-        Text("Jogos. Presença. Recompensas.", style = Xau.type.body, color = c.textSecondary)
+        Text(
+            "Jogos. Presença. Recompensas.",
+            style = Xau.type.body,
+            color = c.textSecondary,
+            modifier = Modifier.entrance(2),
+        )
 
         Spacer(Modifier.height(Space.huge))
 
@@ -199,6 +274,7 @@ private fun Welcome(error: String?, onAdd: () -> Unit) {
         // it.
         Box(
             Modifier
+                .entrance(4)
                 .fillMaxWidth()
                 .height(Space.touch + 6.dp)
                 .clip(RoundedCornerShape(Radius.control))
