@@ -230,6 +230,15 @@ object Api {
         )
     }
 
+    /**
+     * One account's Rewards level (1-3), read live. Null when the service
+     * did not report one, which is not the same as level 1.
+     */
+    suspend fun rewardsLevel(xuid: String): Long? =
+        obj("rewards", JSONObject().put("xuid", xuid)).let {
+            if (it.isNull("level")) null else it.getLong("level")
+        }
+
     /** One account's full mission list, read live. */
     suspend fun missions(xuid: String): List<Mission> =
         arr("missions", JSONObject().put("xuid", xuid)).map {

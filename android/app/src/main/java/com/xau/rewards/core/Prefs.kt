@@ -25,8 +25,14 @@ class Prefs(context: Context) {
         get() = sp.getBoolean(KEY_DONE, true)
         set(v) = sp.edit().putBoolean(KEY_DONE, v).apply()
 
+    /** A notification when an account reaches a new Rewards level mid-farm. */
+    var notifyLevelUp: Boolean
+        get() = sp.getBoolean(KEY_LEVEL, true)
+        set(v) = sp.edit().putBoolean(KEY_LEVEL, v).apply()
+
     private companion object {
         const val KEY_ONGOING = "ongoing_notification"
         const val KEY_DONE = "notify_when_done"
+        const val KEY_LEVEL = "notify_level_up"
     }
 }
