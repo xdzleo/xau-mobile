@@ -1,0 +1,2 @@
+# Shell scripts must keep LF: bash reads a CR as part of each command.
+*.sh text eol=lf
