@@ -21,7 +21,7 @@
 //! A session restored from a stored token has no address, because nobody
 //! typed anything — and that is reported as absent rather than guessed.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -90,6 +90,34 @@ pub struct Store {
     /// is issued silently. Absent for accounts added the old way.
     #[serde(default)]
     pub windows: BTreeMap<String, msa_device::UserSession>,
+    /// Accounts the user froze: not a single request goes out for them
+    /// (no sign-in check, no balance, no claim, no farm) until unfrozen.
+    #[serde(default)]
+    pub frozen: BTreeSet<String>,
+    /// xuid -> the last profile Xbox returned, so a frozen account still
+    /// shows its name and picture without asking for them.
+    #[serde(default)]
+    pub profiles: BTreeMap<String, CachedProfile>,
+    /// xuid -> the last Rewards figures read while the account was live,
+    /// shown (as such) on its card once it is frozen.
+    #[serde(default)]
+    pub rewards: BTreeMap<String, CachedRewards>,
+}
+
+/// The last Rewards read of an account, kept for when it may not ask.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CachedRewards {
+    pub balance: i64,
+    pub unclaimed: i64,
+    pub level: Option<i64>,
+}
+
+/// What a row needs to draw an account it may not ask Xbox about.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CachedProfile {
+    pub gamertag: String,
+    pub gamerpic: String,
+    pub gamerscore: i64,
 }
 
 /// The directory this app may write to.
@@ -164,6 +192,9 @@ impl Store {
         self.emails.remove(xuid);
         self.windows.remove(xuid);
         self.devices.remove(xuid);
+        self.frozen.remove(xuid);
+        self.profiles.remove(xuid);
+        self.rewards.remove(xuid);
         self.tokens.remove(xuid).is_some()
     }
 

@@ -21,7 +21,7 @@
 //! `{"err": "..."}`. Kotlin turns that into an exception on its side of
 //! the fence, where an exception is safe.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -47,6 +47,25 @@ struct State {
     /// Accounts whose last refresh failed. Their figures are cleared
     /// rather than left on screen looking current.
     stale: HashMap<String, String>,
+    /// Frozen accounts (mirrors `Store::frozen`): no request of any kind
+    /// goes out for them. Every path to the network for an account passes
+    /// through [`State::live_sessions`] or [`session_of`], which skip them.
+    frozen: HashSet<String>,
+}
+
+impl State {
+    /// The sessions requests may go out for: every one but the frozen.
+    fn live_sessions(&self) -> Vec<Arc<Session>> {
+        self.sessions
+            .iter()
+            .filter(|(x, _)| !self.frozen.contains(*x))
+            .map(|(_, s)| s.clone())
+            .collect()
+    }
+
+    fn first_live(&self) -> Option<String> {
+        self.sessions.keys().find(|x| !self.frozen.contains(*x)).cloned()
+    }
 }
 
 fn state() -> &'static Mutex<State> {
@@ -74,6 +93,9 @@ fn session_of(xuid: &str) -> Result<Arc<Session>> {
     let guard = state()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if guard.frozen.contains(xuid) {
+        return Err(Error::other("conta congelada: descongele para usar"));
+    }
     guard
         .sessions
         .get(xuid)
@@ -88,7 +110,7 @@ fn active_xuid() -> Result<String> {
     guard
         .active
         .clone()
-        .or_else(|| guard.sessions.keys().next().cloned())
+        .or_else(|| guard.first_live())
         .ok_or_else(|| Error::other("nenhuma conta conectada"))
 }
 
@@ -117,6 +139,7 @@ fn account_json(xuid: &str, gamertag: &str, pic: &str, score: i64) -> Value {
         "gamerscore": score,
         "farming": running,
         "active": guard.active.as_deref() == Some(xuid),
+        "frozen": guard.frozen.contains(xuid),
         "staleReason": guard.stale.get(xuid),
         "email": email,
         "farmPercent": snap.as_ref().map(|s| s.percent),
@@ -140,12 +163,24 @@ async fn snapshot(balances: &Balances) -> Value {
         let guard = state()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        guard.sessions.values().cloned().collect()
+        guard.live_sessions()
     };
 
-    let mut out = Vec::with_capacity(sessions.len());
+    let mut store = Store::load();
+    let mut profiles_changed = false;
+    let mut out = Vec::with_capacity(sessions.len() + store.frozen.len());
     for s in sessions {
         let (pic, score) = s.profile_display().await.unwrap_or_default();
+        // Kept for the day this account is frozen and may not ask.
+        let cached = accounts::CachedProfile {
+            gamertag: s.gamertag().to_string(),
+            gamerpic: pic.clone(),
+            gamerscore: score,
+        };
+        if store.profiles.get(s.xuid()) != Some(&cached) {
+            store.profiles.insert(s.xuid().to_string(), cached);
+            profiles_changed = true;
+        }
         let mut row = account_json(s.xuid(), s.gamertag(), &pic, score);
         if let Some((balance, unclaimed, level, open, done, gp)) = balances.get(s.xuid()) {
             row["balance"] = json!(balance);
@@ -156,6 +191,27 @@ async fn snapshot(balances: &Balances) -> Value {
             row["gamepass"] = json!(gp);
         }
         out.push(row);
+    }
+    // Frozen accounts: drawn from the cache alone, nothing asked of Xbox.
+    for xuid in store.frozen.iter().filter(|x| store.tokens.contains_key(*x)) {
+        let p = store.profiles.get(xuid).cloned().unwrap_or_else(|| accounts::CachedProfile {
+            gamertag: xuid.clone(),
+            ..accounts::CachedProfile::default()
+        });
+        let mut row = account_json(xuid, &p.gamertag, &p.gamerpic, p.gamerscore);
+        // The figures from before it was frozen, flagged as such.
+        if let Some(r) = store.rewards.get(xuid) {
+            row["balance"] = json!(r.balance);
+            row["unclaimed"] = json!(r.unclaimed);
+            row["level"] = json!(r.level);
+            row["cached"] = json!(true);
+        }
+        out.push(row);
+    }
+    if profiles_changed {
+        if let Err(e) = store.save() {
+            tracing::warn!(%e, "profile cache not saved");
+        }
     }
     // Stable order, so a refresh never reshuffles the list under a
     // finger that is already reaching for a row.
@@ -169,7 +225,17 @@ async fn restore_all() -> Value {
     let mut store = Store::load();
     let mut failures = HashMap::new();
     let mut renewed = false;
+    {
+        let mut guard = state()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.frozen = store.frozen.iter().cloned().collect();
+    }
     for (xuid, xauth) in store.tokens.clone() {
+        // Frozen: not even the sign-in check. Its row comes from the cache.
+        if store.frozen.contains(&xuid) {
+            continue;
+        }
         // The stored xauth first: one validation call, so a launch shows
         // the account in about a second. Only when it has died (~16h) does
         // a Windows sign-in mint a fresh one, which takes four exchanges.
@@ -215,7 +281,7 @@ async fn restore_all() -> Value {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard.stale.extend(failures);
         if guard.active.is_none() {
-            guard.active = guard.sessions.keys().next().cloned();
+            guard.active = guard.first_live();
         }
     }
     // The renewed xauths and STS tokens; best effort, the next launch
@@ -235,7 +301,7 @@ async fn refresh_all() -> Value {
         let guard = state()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        guard.sessions.values().cloned().collect()
+        guard.live_sessions()
     };
 
     let mut balances = Balances::new();
@@ -268,6 +334,21 @@ async fn refresh_all() -> Value {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard.stale = stale;
+    }
+    // Keep each live read, so the card can still show it once frozen.
+    let mut store = Store::load();
+    let mut changed = false;
+    for (xuid, (balance, unclaimed, level, ..)) in &balances {
+        let r = accounts::CachedRewards { balance: *balance, unclaimed: *unclaimed, level: *level };
+        if store.rewards.get(xuid) != Some(&r) {
+            store.rewards.insert(xuid.clone(), r);
+            changed = true;
+        }
+    }
+    if changed {
+        if let Err(e) = store.save() {
+            tracing::warn!(%e, "rewards cache not saved");
+        }
     }
     snapshot(&balances).await
 }
@@ -405,10 +486,80 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
                 guard.sessions.remove(&xuid);
                 guard.stale.remove(&xuid);
                 if guard.active.as_deref() == Some(xuid.as_str()) {
-                    guard.active = guard.sessions.keys().next().cloned();
+                    guard.active = guard.first_live();
                 }
             }
             Ok(snapshot(&Balances::new()).await)
+        }
+
+        // Freeze: the account goes silent (no sign-in check, balance,
+        // claim, offers or farm) and its farm stops now. Unfreeze: it
+        // signs in again, the only request this makes.
+        "set_frozen" => {
+            let xuid = arg("xuid");
+            let freeze = arg("frozen") == "1";
+            let mut store = Store::load();
+            if !store.tokens.contains_key(&xuid) {
+                return Err(Error::other("conta não encontrada"));
+            }
+            if freeze {
+                store.frozen.insert(xuid.clone());
+            } else {
+                store.frozen.remove(&xuid);
+            }
+            store.save()?;
+            {
+                let mut guard = state()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if freeze {
+                    guard.frozen.insert(xuid.clone());
+                    if let Some(h) = guard.farms.remove(&xuid) {
+                        h.stop();
+                    }
+                    guard.stale.remove(&xuid);
+                    if guard.active.as_deref() == Some(xuid.as_str()) {
+                        guard.active = guard.first_live();
+                    }
+                } else {
+                    guard.frozen.remove(&xuid);
+                }
+            }
+            let needs_session = !freeze
+                && !state()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .sessions
+                    .contains_key(&xuid);
+            if needs_session {
+                // Frozen since launch: it never signed in, so do it now,
+                // the same way a launch would.
+                let xauth = store.tokens.get(&xuid).cloned().unwrap_or_default();
+                let restored = match (store.device_of(&xuid).cloned(), store.windows.get(&xuid).cloned()) {
+                    (Some(device), Some(user)) => match xau_mobile::windows_login::restore(&device, user).await {
+                        Ok((s, user)) => {
+                            store.put(&xuid, s.xauth());
+                            store.windows.insert(xuid.clone(), user);
+                            let _ = store.save();
+                            Ok(s)
+                        }
+                        Err(_) => xau_mobile::session_from_token(xauth).await,
+                    },
+                    _ => xau_mobile::session_from_token(xauth).await,
+                };
+                let mut guard = state()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                match restored {
+                    Ok(s) => {
+                        guard.sessions.insert(xuid.clone(), Arc::new(s));
+                    }
+                    Err(e) => {
+                        guard.stale.insert(xuid.clone(), format!("sessão expirada: {e}"));
+                    }
+                }
+            }
+            Ok(refresh_all().await)
         }
 
         // ---- accounts ----
@@ -420,6 +571,9 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
             let mut guard = state()
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if guard.frozen.contains(&xuid) {
+                return Err(Error::other("conta congelada: descongele para usar"));
+            }
             if !guard.sessions.contains_key(&xuid) {
                 return Err(Error::other("conta não está conectada"));
             }
@@ -490,7 +644,7 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
                 let guard = state()
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                guard.sessions.values().cloned().collect()
+                guard.live_sessions()
             };
             let mut added = 0i64;
             let mut claimed_for = Vec::new();
@@ -524,7 +678,7 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
                 let guard = state()
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                guard.sessions.values().cloned().collect()
+                guard.live_sessions()
             };
             // Names come from a separate, unauthenticated content feed,
             // so it is fetched once and shared across accounts rather
@@ -623,7 +777,7 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
                 let guard = state()
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                guard.sessions.values().cloned().collect()
+                guard.live_sessions()
             };
             let names = if let Some(first) = sessions.first() {
                 xau_mobile::offer_names(first).await.unwrap_or_default()
@@ -686,8 +840,57 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
             let page = xau_mobile::store::search(&arg("query"), Some(cursor.as_str())).await?;
             Ok(serde_json::to_value(page)?)
         }
-        "store_featured" => Ok(serde_json::to_value(xau_mobile::store::featured().await?)?),
+        // Search and list in one call, filtered here: the phone gets only
+        // the games that pass, and the pages stay cached for the next filter.
+        "store_browse" => {
+            let cursor = arg("cursor");
+            let filter = xau_mobile::store::Filter {
+                microsoft_only: arg("microsoft") == "1",
+                hide_free: arg("hideFree") == "1",
+                min: arg("min").parse().ok(),
+                max: arg("max").parse().ok(),
+            };
+            let page = xau_mobile::store::browse(
+                &arg("query"),
+                &arg("list"),
+                Some(cursor.as_str()),
+                &filter,
+                arg("want").parse().unwrap_or(36),
+            )
+            .await?;
+            Ok(serde_json::to_value(page)?)
+        }
+        "store_prewarm" => {
+            xau_mobile::store::prewarm().await;
+            Ok(json!({}))
+        }
+        "store_featured" => {
+            let cursor = arg("cursor");
+            let page = xau_mobile::store::featured(&arg("list"), Some(cursor.as_str())).await?;
+            Ok(serde_json::to_value(page)?)
+        }
         "store_purchase_url" => Ok(json!({ "url": xau_mobile::store::purchase_url(&arg("productId")) })),
+        // The checkout, signed in the way the Xbox app does it: an XSTS
+        // for mp.microsoft.com posted as `xToken`, no web session needed.
+        "store_purchase_form" => {
+            let xuid = active_xuid()?;
+            if state().lock().unwrap_or_else(std::sync::PoisonError::into_inner).frozen.contains(&xuid) {
+                return Err(Error::other("conta congelada: descongele para usar"));
+            }
+            let mut store = Store::load();
+            let (Some(device), Some(mut user)) =
+                (store.device_of(&xuid).cloned(), store.windows.get(&xuid).cloned())
+            else {
+                return Err(Error::other("entre de novo com o login do Windows para comprar"));
+            };
+            let token = xau_mobile::windows_login::issue_store_token(&device, &mut user).await?;
+            store.windows.insert(xuid, user);
+            if let Err(e) = store.save() {
+                tracing::warn!(%e, "renewed sign-in not saved");
+            }
+            let form = xau_mobile::store::purchase_form(&arg("productId"), &token).await?;
+            Ok(serde_json::to_value(form)?)
+        }
 
         // Every farm this process has run, read from memory only: the
         // foreground service polls this every few seconds for its
@@ -725,10 +928,21 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
             Ok(Value::Array(
                 xau_mobile::farm_titles()
                     .into_iter()
-                    .map(|(id, name)| json!({ "titleId": id, "name": name, "image": art.get(id) }))
+                    .map(|t| json!({ "titleId": t.id, "name": t.name, "image": art.get(&t.id) }))
                     .collect(),
             ))
         }
+
+        // "Trocar jogos": the next pool of eight Microsoft games. A farm
+        // already running keeps its games; the next start uses these.
+        "farm_next_pool" => {
+            let (index, _) = xau_mobile::farm_titles::next()?;
+            Ok(json!({ "pool": index + 1, "pools": xau_mobile::farm_titles::POOLS }))
+        }
+        "farm_pool" => Ok(json!({
+            "pool": xau_mobile::farm_titles::current_pool() + 1,
+            "pools": xau_mobile::farm_titles::POOLS,
+        })),
 
         "farm_start" => {
             let xuid = if arg("xuid").is_empty() {

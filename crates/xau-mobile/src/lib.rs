@@ -20,6 +20,7 @@
 //! reachable, and the linker drops them.
 
 pub mod accounts;
+pub mod farm_titles;
 pub mod offers_csv;
 pub mod store;
 pub mod windows_login;
@@ -32,7 +33,7 @@ use xau_core::oauth::{
 };
 use xau_core::xbox::client::offers::Offer;
 use xau_core::xbox::client::rewards::{ClaimResult, RewardsInfo};
-use xau_core::xbox::farm::{Farm, FarmConfig, FIXED_CONSOLE_TITLES};
+use xau_core::xbox::farm::{Farm, FarmConfig};
 // Re-exported: the JNI bridge holds the handle to stop the farm and to
 // poll snapshots for the progress the Compose screen draws.
 use xau_core::xbox::client::{XboxClient, XboxClientOptions};
@@ -326,23 +327,18 @@ pub async fn claim_offer(session: &Session, offer_id: &str) -> Result<Offer> {
 
 // ----------------------------------------------------------------- farm
 
-/// Titles the farm broadcasts, as `(id, name)`.
+/// Titles the farm broadcasts: the pool "Trocar jogos" last chose (see
+/// [`farm_titles`]).
 #[must_use]
-pub fn farm_titles() -> Vec<(&'static str, &'static str)> {
-    FIXED_CONSOLE_TITLES
-        .iter()
-        .map(|(id, name, _)| (*id, *name))
-        .collect()
+pub fn farm_titles() -> Vec<farm_titles::FarmTitle> {
+    farm_titles::current()
 }
 
 /// Box art for the farm's titles, `titleId -> image URL`.
 ///
 /// Decoration: any failure is an empty map, never an error.
 pub async fn farm_title_art(session: &Session) -> std::collections::HashMap<String, String> {
-    let ids: Vec<String> = FIXED_CONSOLE_TITLES
-        .iter()
-        .map(|(id, _, _)| (*id).to_string())
-        .collect();
+    let ids: Vec<String> = farm_titles::current().into_iter().map(|t| t.id).collect();
     session
         .client
         .get_title_images(&ids)
@@ -353,7 +349,7 @@ pub async fn farm_title_art(session: &Session) -> std::collections::HashMap<Stri
         })
 }
 
-/// Broadcast presence across the 8 fixed console titles for up to
+/// Broadcast presence across the farm's 8 console titles for up to
 /// [`FARM_CYCLE`] (15 minutes), then stop on its own. Each ping's outcome
 /// (accepted / denied / rejected / not sent) is in the snapshot's
 /// `presence`, so the screen can say when Xbox refuses it.
@@ -362,10 +358,7 @@ pub async fn farm_title_art(session: &Session) -> std::collections::HashMap<Stri
 /// Fails if the title list does not satisfy the presence cap.
 pub fn start_farm(session: &Session) -> Result<FarmHandle> {
     let cfg = FarmConfig {
-        title_ids: FIXED_CONSOLE_TITLES
-            .iter()
-            .map(|(id, _, _)| (*id).to_string())
-            .collect(),
+        title_ids: farm_titles::current().into_iter().map(|t| t.id).collect(),
         cycle_duration: FARM_CYCLE,
         max_cycles: Some(1),
         ..Default::default()
@@ -388,7 +381,7 @@ mod tests {
     fn the_farm_preset_is_intact() {
         let t = farm_titles();
         assert_eq!(t.len(), xau_core::xbox::farm::FARM_MAX_TITLES);
-        assert!(t.iter().all(|(id, n)| !id.is_empty() && !n.is_empty()));
+        assert!(t.iter().all(|x| !x.id.is_empty() && !x.name.is_empty()));
     }
 
     /// The login hinges on treating only the real redirect as terminal,

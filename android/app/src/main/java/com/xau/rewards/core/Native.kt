@@ -150,6 +150,10 @@ object Api {
 
     suspend fun refresh(): List<Account> = arr("refresh").toAccounts()
 
+    /** Freeze an account (no request goes out for it) or bring it back. */
+    suspend fun setFrozen(xuid: String, frozen: Boolean): List<Account> =
+        arr("set_frozen", JSONObject().put("xuid", xuid).put("frozen", if (frozen) "1" else "0")).toAccounts()
+
     suspend fun select(xuid: String) {
         obj("select", JSONObject().put("xuid", xuid))
     }
@@ -189,12 +193,60 @@ object Api {
     suspend fun storeSearch(query: String, cursor: String? = null): StorePage =
         obj("store_search", JSONObject().put("query", query).put("cursor", cursor ?: "")).toStorePage()
 
-    /** What is trending in the Store. */
-    suspend fun storeFeatured(): StorePage = obj("store_featured").toStorePage()
+    /** A Store list, a page at a time: trending, or the paid ones. */
+    suspend fun storeFeatured(paid: Boolean = false, cursor: String? = null): StorePage =
+        obj(
+            "store_featured",
+            JSONObject().put("list", if (paid) "TopPaid" else "TopTrending").put("cursor", cursor ?: ""),
+        ).toStorePage()
+
+    /**
+     * Search or a list, already filtered: the native side reads as many
+     * Store pages as the filter needs (cached for ten minutes) and hands
+     * back about [want] games that pass. Pass the page's cursor for more.
+     */
+    suspend fun storeBrowse(
+        query: String,
+        paid: Boolean,
+        cursor: String?,
+        microsoft: Boolean,
+        hideFree: Boolean,
+        min: Double?,
+        max: Double?,
+        want: Int = 36,
+    ): StorePage =
+        obj(
+            "store_browse",
+            JSONObject()
+                .put("query", query)
+                .put("list", if (paid) "TopPaid" else "TopTrending")
+                .put("cursor", cursor ?: "")
+                .put("microsoft", if (microsoft) "1" else "0")
+                .put("hideFree", if (hideFree) "1" else "0")
+                .put("min", min?.toString() ?: "")
+                .put("max", max?.toString() ?: "")
+                .put("want", want.toString()),
+        ).toStorePage()
+
+    /** Load the store's first screen into the native cache ahead of time. */
+    suspend fun storePrewarm() {
+        obj("store_prewarm")
+    }
 
     /** The Store's page for a product, where it is bought. */
     suspend fun storePurchaseUrl(productId: String): String =
         obj("store_purchase_url", JSONObject().put("productId", productId)).getString("url")
+
+    /** The checkout for a product, signed in as the active account. */
+    suspend fun storePurchaseForm(productId: String): PurchaseForm =
+        obj("store_purchase_form", JSONObject().put("productId", productId)).let { o ->
+            val f = o.getJSONArray("fields")
+            PurchaseForm(
+                host = o.getString("host"),
+                action = o.getString("action"),
+                fields = (0 until f.length()).map { f.getJSONArray(it).let { p -> p.getString(0) to p.getString(1) } },
+            )
+        }
 
     /** Every farm this process has run, from memory: no request is made. */
     suspend fun farmSummary(): List<FarmRun> =
@@ -208,6 +260,14 @@ object Api {
                 presence = if (it.isNull("presence")) null else it.getString("presence"),
             )
         }
+
+    /** Switch the farm to the next pool of games: (pool, pools), 1-based. */
+    suspend fun farmNextPool(): Pair<Int, Int> =
+        obj("farm_next_pool").let { it.getInt("pool") to it.getInt("pools") }
+
+    /** The farm's pool of games in use: (pool, pools), 1-based. */
+    suspend fun farmPool(): Pair<Int, Int> =
+        obj("farm_pool").let { it.getInt("pool") to it.getInt("pools") }
 
     suspend fun farmStart(xuid: String) {
         obj("farm_start", JSONObject().put("xuid", xuid))
@@ -372,6 +432,11 @@ data class Account(
     val active: Boolean,
     /** Why this row's figures are missing, when they are. */
     val staleReason: String?,
+    /**
+     * Frozen by the user: the core sends nothing for it (no sign-in
+     * check, balance, claim or farm); its row is drawn from a cache.
+     */
+    val frozen: Boolean = false,
 )
 
 data class ClaimOutcome(val pointsAdded: Long, val accounts: List<Account>)
@@ -480,6 +545,9 @@ data class StoreProduct(
 
 data class StorePage(val products: List<StoreProduct>, val cursor: String?)
 
+/** The checkout form: loaded from [host] so it posts with that origin. */
+data class PurchaseForm(val host: String, val action: String, val fields: List<Pair<String, String>>)
+
 private fun JSONObject.str(key: String): String? = if (isNull(key)) null else optString(key).ifEmpty { null }
 
 private fun JSONObject.toStorePage(): StorePage = StorePage(
@@ -557,5 +625,6 @@ private fun JSONArray.toAccounts(): List<Account> = map { o ->
         email = if (o.isNull("email")) null else o.getString("email"),
         active = o.optBoolean("active"),
         staleReason = if (o.isNull("staleReason")) null else o.getString("staleReason"),
+        frozen = o.optBoolean("frozen"),
     )
 }

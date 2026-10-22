@@ -120,6 +120,7 @@ fun AccountDetail(account: Account, onBack: () -> Unit) {
                     color = c.textSecondary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = account.email?.let { Modifier.copyOnTap(it) } ?: Modifier,
                 )
             }
         }

@@ -193,6 +193,39 @@ pub async fn on_message(body: &str) -> Result<PageReply> {
 /// Fails when the device or the stored sign-in is no longer accepted
 /// (the user then signs in again), or on transport failures.
 pub async fn issue_xauth(device: &Device, user: &mut UserSession) -> Result<String> {
+    let (_, sisu) = sisu(device, user, None).await?;
+    sisu.xauth_header()
+        .ok_or_else(|| Error::other("SISU sem AuthorizationToken"))
+}
+
+/// Mint the Store's `xToken` (an XSTS for `mp.microsoft.com`) from a
+/// stored Windows sign-in: what the Xbox app posts to the purchase page,
+/// which then opens signed in without any cookie.
+///
+/// # Errors
+/// As [`issue_xauth`].
+pub async fn issue_store_token(device: &Device, user: &mut UserSession) -> Result<String> {
+    let party = xau_core::oauth::consts::STORE_RELYING_PARTY;
+    // SISU can issue the token for the Store's party itself; if it
+    // declines, trade the Xbox Live tickets at XSTS instead.
+    match sisu(device, user, Some(party)).await {
+        Ok((_, sisu)) if sisu.xauth_header().is_some() => {
+            sisu.xauth_header().ok_or_else(|| Error::other("SISU sem AuthorizationToken"))
+        }
+        first => {
+            let why = first.err().map(|e| e.to_string()).unwrap_or_default();
+            tracing::warn!(%why, "SISU would not issue the store token; trying XSTS");
+            let (signed, sisu) = sisu(device, user, None).await?;
+            signed.xsts_authorize(&sisu, party).await
+        }
+    }
+}
+
+async fn sisu(
+    device: &Device,
+    user: &mut UserSession,
+    relying_party: Option<&str>,
+) -> Result<(XboxSignedClient, xau_core::oauth::XboxSisuResponse)> {
     let http = http()?;
     let device_sts = msa_device::authenticate_device(&http, device).await.map_err(err)?;
     let tickets = msa_device::xbox_tickets(&http, &device_sts, user, XBOX_APP_CLIENT_ID)
@@ -205,10 +238,9 @@ pub async fn issue_xauth(device: &Device, user: &mut UserSession) -> Result<Stri
     let signed = XboxSignedClient::new()?;
     let dev = signed.request_device_token_rps(&tickets.device_rps).await?;
     let sisu = signed
-        .sisu_auth_rps(&tickets.user_ticket, XBOX_APP_CLIENT_ID, &dev.token)
+        .sisu_auth_rps_for(&tickets.user_ticket, XBOX_APP_CLIENT_ID, &dev.token, relying_party)
         .await?;
-    sisu.xauth_header()
-        .ok_or_else(|| Error::other("SISU sem AuthorizationToken"))
+    Ok((signed, sisu))
 }
 
 /// Rebuild a stored Windows account with a freshly issued xauth.

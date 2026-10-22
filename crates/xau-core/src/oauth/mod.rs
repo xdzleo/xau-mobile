@@ -46,6 +46,9 @@ pub mod consts {
     pub const XBOX_LIVE_RELYING_PARTY: &str = "http://xboxlive.com";
     pub const XBOX_AUTH_RELYING_PARTY: &str = "http://auth.xboxlive.com";
     pub const XBOX_EVENTS_RELYING_PARTY: &str = "http://events.xboxlive.com";
+    /// The Store's purchase page (`buynowui`) takes an XSTS of this party.
+    pub const STORE_RELYING_PARTY: &str = "http://mp.microsoft.com/";
+    pub const XSTS_AUTH_URL: &str = "https://xsts.auth.xboxlive.com/xsts/authorize";
 
     pub const DEVICE_CODE_URL: &str = "https://login.live.com/oauth20_connect.srf";
     /// Consent page for the authorization-code (embedded WebView) flow.

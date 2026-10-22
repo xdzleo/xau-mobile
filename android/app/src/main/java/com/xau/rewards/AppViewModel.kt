@@ -28,6 +28,9 @@ data class UiState(
     val farm: FarmState? = null,
     /** The farm's 8 titles with their box art; empty until loaded. */
     val farmTitles: List<FarmTitle> = emptyList(),
+    /** Which pool of games the farm uses, 1-based, out of [farmPools]. */
+    val farmPool: Int = 1,
+    val farmPools: Int = 3,
     val publicIp: String? = null,
     val refreshing: Boolean = false,
     val claimingXuid: String? = null,
@@ -36,14 +39,16 @@ data class UiState(
     /** Transient confirmation of something that just happened. */
     val notice: String? = null,
 ) {
-    val active: Account? get() = accounts.firstOrNull { it.active } ?: accounts.firstOrNull()
+    /** Frozen accounts never count: nothing is asked for them. */
+    private val live: List<Account> get() = accounts.filterNot { it.frozen }
+    val active: Account? get() = live.firstOrNull { it.active } ?: live.firstOrNull()
     val signedIn: Boolean get() = accounts.isNotEmpty()
-    val totalWaiting: Long get() = accounts.sumOf { it.unclaimed ?: 0L }
+    val totalWaiting: Long get() = live.sumOf { it.unclaimed ?: 0L }
     /** Null when any account failed to report — a partial sum is a
      *  more confident lie than an em dash. */
     val totalBalance: Long?
-        get() = if (accounts.any { it.balance == null }) null
-        else accounts.sumOf { it.balance ?: 0L }
+        get() = if (live.any { it.balance == null }) null
+        else live.sumOf { it.balance ?: 0L }
 }
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
@@ -68,6 +73,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 .onSuccess { _state.update { s -> s.copy(accounts = it, booting = false) } }
                 .onFailure { e -> _state.update { s -> s.copy(booting = false, fatal = e.message) } }
             if (_state.value.signedIn) refresh()
+            // The store then opens from cache instead of the network.
+            launch { runCatching { Api.storePrewarm() } }
             loadIp()
         }
     }
@@ -209,6 +216,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Freeze an account (it goes silent: no sign-in check, balance,
+     * claim or farm; a running farm stops) or bring it back.
+     */
+    fun toggleFrozen(xuid: String) = viewModelScope.launch {
+        val freeze = _state.value.accounts.firstOrNull { it.xuid == xuid }?.frozen != true
+        runCatching { Api.setFrozen(xuid, freeze) }
+            .onSuccess { list ->
+                _state.update {
+                    it.copy(accounts = list, notice = if (freeze) "Conta congelada" else "Conta descongelada")
+                }
+                if (freeze && list.none { it.farming }) FarmService.stop(getApplication())
+            }
+            .onFailure { e -> _state.update { it.copy(notice = e.message) } }
+    }
+
     // ------------------------------------------------------------- farm
 
     /** Per account: the core keys farms by xuid, so the UI does too. */
@@ -233,10 +256,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * The farm's titles and their art. Asked again until the art has
      * arrived: it needs a signed-in account, and a first launch has none.
      */
-    private suspend fun loadFarmTitles() {
-        if (_state.value.farmTitles.any { it.image != null }) return
+    private suspend fun loadFarmTitles(force: Boolean = false) {
+        if (!force && _state.value.farmTitles.any { it.image != null }) return
         runCatching { Api.farmTitles() }
             .onSuccess { t -> _state.update { it.copy(farmTitles = t) } }
+        runCatching { Api.farmPool() }
+            .onSuccess { (pool, pools) -> _state.update { it.copy(farmPool = pool, farmPools = pools) } }
+    }
+
+    /**
+     * "Trocar jogos": the next pool of eight Microsoft games. A farm
+     * already running keeps its games until it ends; the next start uses
+     * the new ones.
+     */
+    fun nextFarmPool() {
+        viewModelScope.launch {
+            runCatching { Api.farmNextPool() }
+                .onSuccess { (pool, pools) ->
+                    val running = _state.value.accounts.any { it.farming }
+                    _state.update {
+                        it.copy(
+                            farmPool = pool,
+                            farmPools = pools,
+                            notice = if (running) "Pool $pool de $pools: vale no próximo farm" else "Pool $pool de $pools",
+                        )
+                    }
+                    loadFarmTitles(force = true)
+                }
+                .onFailure { e -> _state.update { it.copy(notice = e.message) } }
+        }
     }
 
     private suspend fun refreshFarm() {

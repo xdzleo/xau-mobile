@@ -170,6 +170,8 @@ class MainActivity : ComponentActivity() {
                             onOpenOffers = { showOffers = true },
                             onOpenSettings = { showSettings = true },
                             onRetry = { vm.refresh() },
+                            onNextFarmPool = vm::nextFarmPool,
+                            onToggleFrozen = vm::toggleFrozen,
                         )
                     }
 

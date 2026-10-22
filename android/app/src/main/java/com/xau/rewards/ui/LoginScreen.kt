@@ -180,6 +180,9 @@ fun LoginScreen(
                                                 }
                                                 is LoginPageAction.Done -> {
                                                     finished = true
+                                                    // Persist the Microsoft session
+                                                    // so the Store page reuses it.
+                                                    CookieManager.getInstance().flush()
                                                     onDone(action.outcome)
                                                 }
                                             }

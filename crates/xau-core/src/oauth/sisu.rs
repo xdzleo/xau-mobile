@@ -224,15 +224,61 @@ impl XboxSignedClient {
         client_id: &str,
         device_token: &str,
     ) -> Result<XboxSisuResponse> {
+        self.sisu_auth_rps_for(user_ticket, client_id, device_token, None)
+            .await
+    }
+
+    /// As [`Self::sisu_auth_rps`], with the `AuthorizationToken` issued
+    /// for `relying_party` instead of Xbox Live.
+    pub async fn sisu_auth_rps_for(
+        &self,
+        user_ticket: &str,
+        client_id: &str,
+        device_token: &str,
+        relying_party: Option<&str>,
+    ) -> Result<XboxSisuResponse> {
         let body = RpsSisuRequestBody {
             access_token: user_ticket.to_string(),
             app_id: client_id.to_string(),
             device_token: device_token.to_string(),
             sandbox: "RETAIL",
             site_name: "user.auth.xboxlive.com",
+            relying_party: relying_party.map(str::to_string),
             proof_key: self.signer.proof_key().clone(),
         };
         self.signed_post(consts::SISU_AUTH_URL, "", &body).await
+    }
+
+    /// `POST https://xsts.auth.xboxlive.com/xsts/authorize`: trade the
+    /// user/device/title tokens of a SISU response for an XSTS token of
+    /// another relying party, as `XBL3.0 x=<uhs>;<token>`.
+    pub async fn xsts_authorize(
+        &self,
+        sisu: &XboxSisuResponse,
+        relying_party: &str,
+    ) -> Result<String> {
+        let user = sisu
+            .user_token
+            .as_ref()
+            .ok_or_else(|| Error::other("SISU sem UserToken"))?;
+        // XSTS refuses a `null` token, so the optional ones are left out.
+        let mut props = serde_json::json!({ "SandboxId": "RETAIL", "UserTokens": [user.token] });
+        if let Some(d) = &sisu.device_token {
+            props["DeviceToken"] = d.as_str().into();
+        }
+        if let Some(t) = &sisu.title_token {
+            props["TitleToken"] = t.token.as_str().into();
+        }
+        let body = serde_json::json!({
+            "Properties": props,
+            "RelyingParty": relying_party,
+            "TokenType": "JWT",
+        });
+        let xsts: XboxAuthResponse = self.signed_post(consts::XSTS_AUTH_URL, "", &body).await?;
+        let uhs = xsts
+            .user_hash()
+            .ok_or_else(|| Error::other("XSTS sem uhs"))?;
+        Ok(format!("XBL3.0 x={uhs};{}", xsts.token))
     }
 
     /// Runs the full device → SISU flow for the given Microsoft access token
@@ -399,6 +445,9 @@ struct RpsSisuRequestBody {
     sandbox: &'static str,
     #[serde(rename = "SiteName")]
     site_name: &'static str,
+    /// Absent: the Xbox Live token. Set: a token for that party.
+    #[serde(rename = "RelyingParty", skip_serializing_if = "Option::is_none")]
+    relying_party: Option<String>,
     #[serde(rename = "ProofKey")]
     proof_key: ProofKey,
 }
