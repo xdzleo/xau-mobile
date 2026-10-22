@@ -19,3 +19,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 # Only for the public-IP lookup; every Xbox call goes through xau-core.
 reqwest = { workspace = true }
+# Windows-device sign-in (MSA device account + inline login), the only
+# credential Xbox accepts the multi-title presence heartbeat from.
+msa-device = { path = "../msa-device" }

@@ -1,0 +1,43 @@
+[package]
+name = "msa-device"
+version = "0.1.0"
+# The vendored xodus sources use let-chains, which need edition 2024.
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Windows-device Microsoft account sign-in (MSA device account, RST2, inline login), vendored from xodus"
+
+[dependencies]
+reqwest.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+base64 = "0.23.1"
+uuid = { version = "1.26", features = ["v4"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+quick-xml = { version = "0.42.0", features = ["serialize", "overlapped-lists"] }
+rand = "0.10.2"
+aes = "0.9.2"
+aes-keywrap = "0.9.0"
+cbc = "0.2.1"
+zerocopy = { version = "0.8.56", features = ["derive"] }
+bergshamra = "0.8.0"
+bergshamra-c14n = "0.8.0"
+kryptering = "0.5.0"
+hmac = "0.13.0"
+sha2 = "0.11.0"
+rsa = { version = "0.9.10", features = ["serde", "sha2"] }
+num_enum = "0.7.6"
+num-bigint-dig = "0.9.1"
+num-integer = "0.1.47"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+# Not `workspace = true`: the vendored modules keep upstream's code as-is
+# (it would trip the workspace's deny-level lints, e.g. a panicking
+# `From`), so only what this crate's own code must hold is set here.
+[lints.rust]
+unsafe_code = "forbid"

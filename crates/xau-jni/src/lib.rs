@@ -166,9 +166,27 @@ async fn snapshot(balances: &Balances) -> Value {
 /// Rebuild every stored session. One dead token costs one account, not
 /// the list — its row comes back marked so the UI can offer a re-login.
 async fn restore_all() -> Value {
-    let store = Store::load();
+    let mut store = Store::load();
     let mut failures = HashMap::new();
-    for (xuid, xauth) in &store.tokens {
+    let mut renewed = false;
+    for (xuid, xauth) in store.tokens.clone() {
+        // A Windows sign-in mints a fresh xauth (the stored one dies
+        // after ~16h); the stored xauth is only the fallback.
+        if let (Some(device), Some(user)) = (store.device.clone(), store.windows.get(&xuid).cloned()) {
+            match xau_mobile::windows_login::restore(&device, user).await {
+                Ok((s, user)) => {
+                    store.put(&xuid, s.xauth());
+                    store.windows.insert(xuid.clone(), user);
+                    renewed = true;
+                    let mut guard = state()
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    guard.sessions.insert(s.xuid().to_string(), Arc::new(s));
+                    continue;
+                }
+                Err(e) => tracing::warn!(%e, "windows sign-in could not be renewed"),
+            }
+        }
         match xau_mobile::session_from_token(xauth.clone()).await {
             Ok(s) => {
                 let mut guard = state()
@@ -188,6 +206,13 @@ async fn restore_all() -> Value {
         guard.stale.extend(failures);
         if guard.active.is_none() {
             guard.active = guard.sessions.keys().next().cloned();
+        }
+    }
+    // The renewed xauths and STS tokens; best effort, the next launch
+    // renews again from whatever is on disk.
+    if renewed {
+        if let Err(e) = store.save() {
+            tracing::warn!(%e, "renewed sign-ins not saved");
         }
     }
     snapshot(&Balances::new()).await
@@ -237,6 +262,62 @@ async fn refresh_all() -> Value {
     snapshot(&balances).await
 }
 
+/// Make a freshly signed-in session live and store it.
+///
+/// `windows` is the Windows sign-in behind it, when there is one: kept so
+/// later launches mint a fresh xauth instead of trusting a stored one.
+async fn register_session(session: Session, windows: Option<xau_mobile::windows_login::UserSession>) -> Value {
+    let xuid = session.xuid().to_string();
+
+    // Register the live session BEFORE touching disk. Persisting
+    // is what lets the account survive a relaunch; it is not what
+    // makes the login real. Ordering these the other way round —
+    // with a `?` on the save — threw away a session that had
+    // authenticated perfectly well, and the screen then showed
+    // "no accounts connected" as though sign-in had failed.
+    let mut store = Store::load();
+    store.put(&xuid, session.xauth());
+    // Only sign-in ever sees this; a restored session has no
+    // address, so it must be kept now or not at all.
+    if let Some(email) = session.email() {
+        store.put_email(&xuid, email);
+    }
+    match windows {
+        Some(user) => {
+            // The Windows sign-in names the account it signed in.
+            if user.username.contains('@') {
+                store.put_email(&xuid, &user.username);
+            }
+            store.windows.insert(xuid.clone(), user);
+        }
+        // Signing in again the old way replaces a Windows sign-in.
+        None => {
+            store.windows.remove(&xuid);
+        }
+    }
+    {
+        let mut guard = state()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.sessions.insert(xuid.clone(), Arc::new(session));
+        guard.stale.remove(&xuid);
+        guard.active = Some(xuid);
+    }
+
+    // Report a failed save instead of swallowing it: the account
+    // works right now but will be gone after a restart, and the
+    // user is entitled to know which of those two is true.
+    let warning = store.save().err().map(|e| {
+        tracing::warn!(%e, "account saved in memory only");
+        format!("conectado, mas não foi possível salvar a sessão: {e}")
+    });
+
+    json!({
+        "accounts": refresh_all().await,
+        "warning": warning,
+    })
+}
+
 // ------------------------------------------------------------ dispatch
 
 #[allow(clippy::too_many_lines)] // A flat match over the wire protocol; splitting it hides the surface.
@@ -261,42 +342,34 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
 
         "finish_login" => {
             let session = xau_mobile::finish_login(&arg("code")).await?;
-            let xuid = session.xuid().to_string();
+            Ok(register_session(session, None).await)
+        }
 
-            // Register the live session BEFORE touching disk. Persisting
-            // is what lets the account survive a relaunch; it is not what
-            // makes the login real. Ordering these the other way round —
-            // with a `?` on the save — threw away a session that had
-            // authenticated perfectly well, and the screen then showed
-            // "no accounts connected" as though sign-in had failed.
-            let mut store = Store::load();
-            store.put(&xuid, session.xauth());
-            // Only sign-in ever sees this; a restored session has no
-            // address, so it must be kept now or not at all.
-            if let Some(email) = session.email() {
-                store.put_email(&xuid, email);
-            }
-            {
-                let mut guard = state()
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                guard.sessions.insert(xuid.clone(), Arc::new(session));
-                guard.stale.remove(&xuid);
-                guard.active = Some(xuid);
-            }
+        // ---- Windows sign-in (the one the presence farm needs) ----
+        "windows_login_start" => {
+            let page = xau_mobile::windows_login::start().await?;
+            Ok(serde_json::to_value(page)?)
+        }
 
-            // Report a failed save instead of swallowing it: the account
-            // works right now but will be gone after a restart, and the
-            // user is entitled to know which of those two is true.
-            let warning = store.save().err().map(|e| {
-                tracing::warn!(%e, "account saved in memory only");
-                format!("conectado, mas não foi possível salvar a sessão: {e}")
-            });
+        // Every message the login page posts to the bridge. The reply
+        // tells the WebView what to do next.
+        "windows_login_message" => {
+            use xau_mobile::windows_login::PageReply;
+            Ok(match xau_mobile::windows_login::on_message(&arg("body")).await? {
+                PageReply::Ignore => json!({ "action": "ignore" }),
+                PageReply::Eval(script) => json!({ "action": "eval", "script": script }),
+                PageReply::Open(url) => json!({ "action": "open", "url": url }),
+                PageReply::Done(session, user) => {
+                    let mut out = register_session(*session, Some(user)).await;
+                    out["action"] = json!("done");
+                    out
+                }
+            })
+        }
 
-            Ok(json!({
-                "accounts": refresh_all().await,
-                "warning": warning,
-            }))
+        "windows_login_cancel" => {
+            xau_mobile::windows_login::cancel();
+            Ok(json!({}))
         }
 
         "sign_out" => {

@@ -21,6 +21,7 @@
 
 pub mod accounts;
 pub mod offers_csv;
+pub mod windows_login;
 
 use std::time::Duration;
 
