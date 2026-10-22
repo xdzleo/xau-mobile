@@ -241,6 +241,29 @@ object Api {
                 progress = it.optInt("progress"),
                 done = it.optBoolean("done"),
                 open = it.optBoolean("open"),
+                description = it.optString("description"),
+                kind = it.optString("kind", "single"),
+                steps = it.optJSONArray("steps")?.let { a ->
+                    (0 until a.length()).map { i ->
+                        val s = a.getJSONObject(i)
+                        MissionStep(
+                            label = s.optString("label"),
+                            points = s.optLong("points"),
+                            done = s.optBoolean("done"),
+                            note = if (s.isNull("note")) null else s.optString("note"),
+                        )
+                    }
+                }.orEmpty(),
+                current = if (it.isNull("current")) null else it.optInt("current"),
+                count = if (it.isNull("count")) null else it.optInt("count"),
+                target = if (it.isNull("target")) null else it.optInt("target"),
+                claimed = if (it.isNull("claimed")) null else it.optLong("claimed"),
+                locked = it.optBoolean("locked"),
+                requirement = if (it.isNull("requirement")) null else it.optString("requirement"),
+                failed = it.optBoolean("failed"),
+                images = it.optJSONArray("images")?.let { a ->
+                    (0 until a.length()).map { i -> a.getString(i) }
+                }.orEmpty(),
             )
         }
 
@@ -410,6 +433,28 @@ data class Mission(
     val progress: Int,
     val done: Boolean,
     val open: Boolean,
+    val description: String = "",
+    /** `streak` (day boxes), `pack` (games to play) or `single`. */
+    val kind: String = "single",
+    val steps: List<MissionStep> = emptyList(),
+    /** Index of today's box; null once finished, lost or locked. */
+    val current: Int? = null,
+    val count: Int? = null,
+    val target: Int? = null,
+    /** Points already credited ("Claimed ✓ 6"). */
+    val claimed: Long? = null,
+    val locked: Boolean = false,
+    val requirement: String? = null,
+    /** The week was lost: "Try again next week". */
+    val failed: Boolean = false,
+    val images: List<String> = emptyList(),
+)
+
+data class MissionStep(
+    val label: String,
+    val points: Long,
+    val done: Boolean,
+    val note: String?,
 )
 
 data class Offer(

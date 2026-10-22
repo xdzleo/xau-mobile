@@ -66,6 +66,9 @@ fun AccountDetail(account: Account, onBack: () -> Unit) {
 
     val open = missions.orEmpty().filter { it.open }
     val done = missions.orEmpty().filter { it.done }
+    // Neither open nor done: behind a requirement. The official page
+    // still lists these, with what unlocks them.
+    val locked = missions.orEmpty().filter { !it.open && !it.done }
 
     Column(
         Modifier
@@ -154,14 +157,21 @@ fun AccountDetail(account: Account, onBack: () -> Unit) {
             ) {
                 if (open.isNotEmpty()) {
                     item { GroupHead("Faltam", open.size, c.green) }
-                    items(open.size) { MissionRow(open[it]) }
+                    items(open.size) { MissionCard(open[it]) }
+                }
+                if (locked.isNotEmpty()) {
+                    item {
+                        Spacer(Modifier.height(Space.md))
+                        GroupHead("Bloqueadas", locked.size, c.textMuted)
+                    }
+                    items(locked.size) { MissionCard(locked[it]) }
                 }
                 if (done.isNotEmpty()) {
                     item {
                         Spacer(Modifier.height(Space.md))
                         GroupHead("Concluídas", done.size, c.textMuted)
                     }
-                    items(done.size) { MissionRow(done[it]) }
+                    items(done.size) { MissionCard(done[it]) }
                 }
             }
         }
@@ -180,74 +190,3 @@ private fun GroupHead(label: String, count: Int, tint: androidx.compose.ui.graph
     }
 }
 
-@Composable
-private fun MissionRow(m: Mission) {
-    val c = Xau.colors
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(Radius.row))
-            .background(c.surface)
-            .border(1.dp, c.outline, RoundedCornerShape(Radius.row))
-            .padding(Space.lg),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (m.done) {
-            Icon(
-                painterResource(R.drawable.ic_check),
-                contentDescription = null,
-                tint = c.green,
-                modifier = Modifier.size(18.dp),
-            )
-        } else {
-            Box(
-                Modifier
-                    .size(18.dp)
-                    .clip(RoundedCornerShape(Radius.pill))
-                    .border(1.5.dp, c.textMuted, RoundedCornerShape(Radius.pill)),
-            )
-        }
-        Spacer(Modifier.width(Space.md))
-
-        Column(Modifier.weight(1f)) {
-            Text(
-                // The service does not always name an activity. Its own
-                // status label is a truer fallback than a made-up title.
-                m.title.ifEmpty { m.label.ifEmpty { "Atividade" } },
-                style = Xau.type.rowTitle,
-                color = if (m.done) c.textSecondary else c.textPrimary,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (!m.done && m.progress in 1..99) {
-                Spacer(Modifier.height(Space.sm))
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(Radius.pill))
-                        .background(c.surfaceHigh),
-                ) {
-                    Box(
-                        Modifier
-                            .fillMaxWidth(m.progress / 100f)
-                            .height(4.dp)
-                            .clip(RoundedCornerShape(Radius.pill))
-                            .background(c.green),
-                    )
-                }
-                Spacer(Modifier.height(Space.xs))
-                Text("${m.progress}%", style = Xau.type.caption, color = c.green)
-            }
-        }
-
-        if (m.points > 0) {
-            Spacer(Modifier.width(Space.md))
-            Text(
-                "+${money(m.points)}",
-                style = Xau.type.captionStrong,
-                color = if (m.done) c.textMuted else c.green,
-            )
-        }
-    }
-}

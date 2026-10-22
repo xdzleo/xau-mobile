@@ -450,6 +450,22 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
                             "progress": m.progress,
                             "done": m.is_done(),
                             "open": m.is_open(),
+                            "description": m.description,
+                            "kind": m.kind,
+                            "steps": m.steps.iter().map(|s| json!({
+                                "label": s.label,
+                                "points": s.points,
+                                "done": s.done,
+                                "note": s.note,
+                            })).collect::<Vec<_>>(),
+                            "current": m.current,
+                            "count": m.count,
+                            "target": m.target,
+                            "claimed": m.claimed_points,
+                            "locked": m.locked,
+                            "requirement": m.requirement,
+                            "failed": m.failed,
+                            "images": m.images,
                         })
                     })
                     .collect::<Vec<_>>(),
