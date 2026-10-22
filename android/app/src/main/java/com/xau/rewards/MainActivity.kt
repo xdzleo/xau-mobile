@@ -137,7 +137,11 @@ class MainActivity : ComponentActivity() {
 
                         showOffers -> OffersScreen(onBack = { showOffers = false })
 
-                        showSettings -> SettingsScreen(onBack = { showSettings = false })
+                        showSettings -> SettingsScreen(
+                            onBack = { showSettings = false },
+                            singleActive = state.singleActive,
+                            onSingleActive = vm::setSingleActive,
+                        )
                         showLog -> LogScreen(onBack = { showLog = false })
 
                         openAccount != null && state.accounts.any { it.xuid == openAccount } ->

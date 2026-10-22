@@ -401,7 +401,13 @@ async fn register_session(
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard.sessions.insert(xuid.clone(), Arc::new(session));
         guard.stale.remove(&xuid);
-        guard.active = Some(xuid);
+        guard.frozen.remove(&xuid);
+        guard.active = Some(xuid.clone());
+    }
+    // A sign-in is live; with one account at a time, the rest freeze.
+    store.frozen.remove(&xuid);
+    if store.single_active {
+        freeze_all_but(&mut store, &xuid);
     }
 
     // Report a failed save instead of swallowing it: the account
@@ -416,6 +422,31 @@ async fn register_session(
         "accounts": refresh_all().await,
         "warning": warning,
     })
+}
+
+/// "Uma conta ativa por vez": freeze every account but `keep`, stopping
+/// their farms, and make `keep` the selected one when it is signed in.
+/// Writes `store.frozen`; the caller saves.
+fn freeze_all_but(store: &mut Store, keep: &str) {
+    let others: Vec<String> = store.tokens.keys().filter(|x| x.as_str() != keep).cloned().collect();
+    store.frozen.extend(others.iter().cloned());
+    store.frozen.remove(keep);
+    let mut guard = state()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for x in &others {
+        guard.frozen.insert(x.clone());
+        if let Some(h) = guard.farms.remove(x) {
+            h.stop();
+        }
+        guard.stale.remove(x);
+    }
+    guard.frozen.remove(keep);
+    if guard.sessions.contains_key(keep) {
+        guard.active = Some(keep.to_string());
+    } else if guard.active.as_ref().is_some_and(|a| guard.frozen.contains(a)) {
+        guard.active = guard.first_live();
+    }
 }
 
 // ------------------------------------------------------------ dispatch
@@ -496,6 +527,52 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
             Ok(snapshot(&Balances::new()).await)
         }
 
+        "single_active" => Ok(json!({ "on": Store::load().single_active })),
+
+        // Turning it on keeps the selected account (else the first live
+        // one) and freezes the rest at once; turning it off unfreezes
+        // nothing, each account stays as it is.
+        "set_single_active" => {
+            let on = arg("on") == "1";
+            let mut store = Store::load();
+            store.single_active = on;
+            if on {
+                let keep = {
+                    let guard = state()
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    guard
+                        .active
+                        .clone()
+                        .filter(|a| !guard.frozen.contains(a))
+                        .or_else(|| guard.first_live())
+                };
+                let keep = keep
+                    .or_else(|| store.tokens.keys().find(|x| !store.frozen.contains(*x)).cloned())
+                    .or_else(|| store.tokens.keys().next().cloned());
+                if let Some(keep) = keep {
+                    // A kept account frozen since launch has no session;
+                    // it stays frozen until unfrozen by hand.
+                    let had_session = state()
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .sessions
+                        .contains_key(&keep);
+                    freeze_all_but(&mut store, &keep);
+                    if !had_session {
+                        store.frozen.insert(keep.clone());
+                        state()
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .frozen
+                            .insert(keep);
+                    }
+                }
+            }
+            store.save()?;
+            Ok(refresh_all().await)
+        }
+
         // Freeze: the account goes silent (no sign-in check, balance,
         // claim, offers or farm) and its farm stops now. Unfreeze: it
         // signs in again, the only request this makes.
@@ -510,6 +587,10 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
                 store.frozen.insert(xuid.clone());
             } else {
                 store.frozen.remove(&xuid);
+                // One account at a time: this one in, every other out.
+                if store.single_active {
+                    freeze_all_but(&mut store, &xuid);
+                }
             }
             store.save()?;
             {

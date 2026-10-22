@@ -150,6 +150,13 @@ object Api {
 
     suspend fun refresh(): List<Account> = arr("refresh").toAccounts()
 
+    /** "Uma conta ativa por vez" is on. */
+    suspend fun singleActive(): Boolean = obj("single_active").optBoolean("on")
+
+    /** Turn "Uma conta ativa por vez" on (freezing all but one) or off. */
+    suspend fun setSingleActive(on: Boolean): List<Account> =
+        arr("set_single_active", JSONObject().put("on", if (on) "1" else "0")).toAccounts()
+
     /** Freeze an account (no request goes out for it) or bring it back. */
     suspend fun setFrozen(xuid: String, frozen: Boolean): List<Account> =
         arr("set_frozen", JSONObject().put("xuid", xuid).put("frozen", if (frozen) "1" else "0")).toAccounts()

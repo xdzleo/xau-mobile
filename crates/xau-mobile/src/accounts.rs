@@ -108,6 +108,10 @@ pub struct Store {
     /// xuid -> the highest balance this account ever showed in the app.
     #[serde(default)]
     pub peaks: BTreeMap<String, i64>,
+    /// "Uma conta ativa por vez": at most one account is unfrozen;
+    /// unfreezing or adding one freezes all the others.
+    #[serde(default)]
+    pub single_active: bool,
 }
 
 /// One Rewards level-up, as the app noticed it.
