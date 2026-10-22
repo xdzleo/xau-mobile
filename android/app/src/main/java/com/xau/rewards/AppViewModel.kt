@@ -7,6 +7,7 @@ import com.xau.rewards.core.Account
 import com.xau.rewards.core.Api
 import com.xau.rewards.core.FarmState
 import com.xau.rewards.core.FarmTitle
+import com.xau.rewards.ui.WebProfiles
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -133,7 +134,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun signOut(xuid: String) = viewModelScope.launch {
         runCatching { Api.signOut(xuid) }
-            .onSuccess { rows -> _state.update { it.copy(accounts = rows, notice = "Conta removida") } }
+            .onSuccess { rows ->
+                // Everything its pages stored goes with it (main thread).
+                WebProfiles.forget(getApplication(), xuid)
+                _state.update { it.copy(accounts = rows, notice = "Conta removida") }
+            }
             .onFailure { e -> _state.update { it.copy(fatal = e.message) } }
     }
 

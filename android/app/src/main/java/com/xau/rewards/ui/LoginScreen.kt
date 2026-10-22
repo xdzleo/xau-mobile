@@ -2,6 +2,7 @@ package com.xau.rewards.ui
 
 import android.annotation.SuppressLint
 import android.webkit.CookieManager
+import androidx.compose.ui.platform.LocalContext
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -83,6 +84,10 @@ fun LoginScreen(
     var working by remember { mutableStateOf(false) }
     // Terminal: after done or an error nothing more is forwarded.
     var finished by remember { mutableStateOf(false) }
+    // This sign-in's own browser profile: empty, and kept as the account's
+    // if the sign-in succeeds (see WebProfiles).
+    val appCtx = LocalContext.current.applicationContext
+    val profile = remember { WebProfiles.newSignIn(appCtx) }
 
     LaunchedEffect(Unit) {
         runCatching { Api.windowsLoginStart() }
@@ -150,6 +155,8 @@ fun LoginScreen(
                     factory = { ctx ->
                         WebView(ctx).apply {
                             val view = this
+                            // Before anything else touches the view.
+                            WebProfiles.apply(this, profile)
                             settings.javaScriptEnabled = true
                             settings.domStorageEnabled = true
                             settings.userAgentString = p.userAgent
@@ -160,8 +167,10 @@ fun LoginScreen(
                             setBackgroundColor(ink)
                             // A fresh jar per sign-in, so adding a second
                             // account does not silently reuse the first
-                            // account's Microsoft session.
-                            CookieManager.getInstance().removeAllCookies(null)
+                            // account's Microsoft session. With profiles the
+                            // new profile already is one, and clearing the
+                            // shared jar would sign the older accounts out.
+                            if (profile == null) CookieManager.getInstance().removeAllCookies(null)
 
                             fun handle(message: String) {
                                 if (finished) return
@@ -181,8 +190,12 @@ fun LoginScreen(
                                                 is LoginPageAction.Done -> {
                                                     finished = true
                                                     // Persist the Microsoft session
-                                                    // so the Store page reuses it.
-                                                    CookieManager.getInstance().flush()
+                                                    // so the Store page reuses it,
+                                                    // in the account's own profile.
+                                                    WebProfiles.cookies(profile).flush()
+                                                    action.outcome.accounts
+                                                        .firstOrNull { it.active }
+                                                        ?.let { WebProfiles.bind(appCtx, it.xuid, profile) }
                                                     onDone(action.outcome)
                                                 }
                                             }
