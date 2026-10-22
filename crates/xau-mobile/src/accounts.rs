@@ -77,10 +77,15 @@ pub struct Store {
     /// accounts.json without it still loads.
     #[serde(default)]
     pub emails: BTreeMap<String, String>,
-    /// This install's MSA device account (see `windows_login`). One per
-    /// install, shared by every account, like a Windows PC's.
+    /// The single shared MSA device of builds before every sign-in got
+    /// its own. Only the accounts signed in then still use it, through
+    /// [`Store::device_of`]; nothing writes it any more.
     #[serde(default)]
     pub device: Option<msa_device::Device>,
+    /// xuid -> the MSA device account (a "Windows PC") that account's
+    /// sign-in registered. Every login registers a new one.
+    #[serde(default)]
+    pub devices: BTreeMap<String, msa_device::Device>,
     /// xuid -> the Windows sign-in behind it, from which a fresh xauth
     /// is issued silently. Absent for accounts added the old way.
     #[serde(default)]
@@ -148,9 +153,17 @@ impl Store {
         self.emails.get(xuid).map(String::as_str)
     }
 
+    /// The device an account's Windows sign-in is bound to: its own, or
+    /// the shared one of older builds.
+    #[must_use]
+    pub fn device_of(&self, xuid: &str) -> Option<&msa_device::Device> {
+        self.devices.get(xuid).or(self.device.as_ref())
+    }
+
     pub fn remove(&mut self, xuid: &str) -> bool {
         self.emails.remove(xuid);
         self.windows.remove(xuid);
+        self.devices.remove(xuid);
         self.tokens.remove(xuid).is_some()
     }
 
@@ -269,6 +282,32 @@ mod tests {
             ..Default::default()
         };
         assert!(a.balance.is_none() && a.unclaimed.is_none());
+    }
+
+    fn device(name: &str) -> msa_device::Device {
+        msa_device::Device {
+            puid: String::new(),
+            hwid: String::new(),
+            device_id: String::new(),
+            splicense: String::new(),
+            username: name.into(),
+            password: String::new(),
+        }
+    }
+
+    /// Every sign-in has its own device; only accounts from the builds
+    /// with one shared device fall back to it, and removing an account
+    /// drops its device so signing it in again registers a new one.
+    #[test]
+    fn each_account_keeps_its_own_device() {
+        let mut s = Store::default();
+        s.device = Some(device("shared"));
+        s.devices.insert("new".into(), device("own"));
+        assert_eq!(s.device_of("new").map(|d| d.username.as_str()), Some("own"));
+        assert_eq!(s.device_of("old").map(|d| d.username.as_str()), Some("shared"));
+        s.put("new", "x");
+        s.remove("new");
+        assert!(!s.devices.contains_key("new"));
     }
 
     /// Stores written before the Windows sign-in must still load, with

@@ -182,7 +182,7 @@ async fn restore_all() -> Value {
                 continue;
             }
         }
-        if let (Some(device), Some(user)) = (store.device.clone(), store.windows.get(&xuid).cloned()) {
+        if let (Some(device), Some(user)) = (store.device_of(&xuid).cloned(), store.windows.get(&xuid).cloned()) {
             match xau_mobile::windows_login::restore(&device, user).await {
                 Ok((s, user)) => {
                     store.put(&xuid, s.xauth());
@@ -276,7 +276,10 @@ async fn refresh_all() -> Value {
 ///
 /// `windows` is the Windows sign-in behind it, when there is one: kept so
 /// later launches mint a fresh xauth instead of trusting a stored one.
-async fn register_session(session: Session, windows: Option<xau_mobile::windows_login::UserSession>) -> Value {
+async fn register_session(
+    session: Session,
+    windows: Option<(xau_mobile::windows_login::UserSession, xau_mobile::windows_login::Device)>,
+) -> Value {
     let xuid = session.xuid().to_string();
 
     // Register the live session BEFORE touching disk. Persisting
@@ -293,16 +296,18 @@ async fn register_session(session: Session, windows: Option<xau_mobile::windows_
         store.put_email(&xuid, email);
     }
     match windows {
-        Some(user) => {
+        Some((user, device)) => {
             // The Windows sign-in names the account it signed in.
             if user.username.contains('@') {
                 store.put_email(&xuid, &user.username);
             }
             store.windows.insert(xuid.clone(), user);
+            store.devices.insert(xuid.clone(), device);
         }
         // Signing in again the old way replaces a Windows sign-in.
         None => {
             store.windows.remove(&xuid);
+            store.devices.remove(&xuid);
         }
     }
     {
@@ -369,8 +374,8 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
                 PageReply::Ignore => json!({ "action": "ignore" }),
                 PageReply::Eval(script) => json!({ "action": "eval", "script": script }),
                 PageReply::Open(url) => json!({ "action": "open", "url": url }),
-                PageReply::Done(session, user) => {
-                    let mut out = register_session(*session, Some(user)).await;
+                PageReply::Done(done) => {
+                    let mut out = register_session(done.session, Some((done.user, done.device))).await;
                     out["action"] = json!("done");
                     out
                 }
