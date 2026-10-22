@@ -53,6 +53,10 @@ pub struct RewardsInfo {
     /// `GamePassUltimate`. `None` means no membership was reported —
     /// which is what an account without Game Pass looks like.
     pub gamepass: Option<String>,
+    /// Every point the account ever earned (`lifetimeEarnedPoints`).
+    /// `None` when the payload did not carry it, which is not 0.
+    #[serde(default)]
+    pub lifetime: Option<i64>,
 }
 
 /// One Rewards activity, whatever state it is in.
@@ -405,6 +409,7 @@ fn parse_program_info(v: &serde_json::Value) -> RewardsInfo {
         level,
         missions,
         gamepass,
+        lifetime: v.get("lifetimeEarnedPoints").and_then(serde_json::Value::as_i64),
     }
 }
 
@@ -723,6 +728,9 @@ mod tests {
         assert_eq!(info.unclaimed, 5, "unclaimedBalance is the pending total");
         assert_eq!(info.balance, 0);
         assert_eq!(info.program.as_deref(), Some("MSAAUTOENROLL"));
+        assert_eq!(info.lifetime, Some(0), "lifetimeEarnedPoints is read");
+        let none = parse_program_info(&serde_json::json!({ "balance": 1 }));
+        assert_eq!(none.lifetime, None, "absent is unknown, not 0");
     }
 
     /// The whole point of the status rules: `active` means "you have not

@@ -156,7 +156,8 @@ impl Store {
         }
         // A read without a level keeps the last known one, so the next
         // read that has it still compares against something.
-        let r = CachedRewards { balance, unclaimed, level: level.or(before) };
+        let lifetime = self.rewards.get(xuid).and_then(|r| r.lifetime);
+        let r = CachedRewards { balance, unclaimed, level: level.or(before), lifetime };
         if self.rewards.get(xuid) != Some(&r) {
             self.rewards.insert(xuid.to_string(), r);
             changed = true;
@@ -170,6 +171,18 @@ impl Store {
         }
         changed
     }
+
+    /// Keep the lifetime total of `xuid`'s last read, for the frozen card.
+    /// A read without one keeps the last known. Call after `record_read`.
+    pub fn record_lifetime(&mut self, xuid: &str, lifetime: Option<i64>) -> bool {
+        match (self.rewards.get_mut(xuid), lifetime) {
+            (Some(r), Some(l)) if r.lifetime != Some(l) => {
+                r.lifetime = Some(l);
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 /// The last Rewards read of an account, kept for when it may not ask.
@@ -178,6 +191,9 @@ pub struct CachedRewards {
     pub balance: i64,
     pub unclaimed: i64,
     pub level: Option<i64>,
+    /// Every point ever earned (`lifetimeEarnedPoints`).
+    #[serde(default)]
+    pub lifetime: Option<i64>,
 }
 
 /// What a row needs to draw an account it may not ask Xbox about.

@@ -682,6 +682,15 @@ private fun AccountCard(
             color = if (stale) c.danger else c.textPrimary,
         )
         Text("pontos Rewards", style = Xau.type.caption, color = c.textMuted)
+        // Every point ever earned, beside what is left to spend.
+        account.lifetime?.let {
+            Spacer(Modifier.height(Space.xs))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(money(it), style = Xau.type.rowFigure, color = c.textSecondary)
+                Spacer(Modifier.width(Space.xs))
+                Text("pontos lifetime", style = Xau.type.caption, color = c.textMuted)
+            }
+        }
 
         Spacer(Modifier.height(Space.md))
 
@@ -805,6 +814,9 @@ private fun FrozenCard(account: Account, onLongPress: () -> Unit, onUnfreeze: ()
                     style = Xau.type.captionStrong,
                     color = c.textPrimary,
                 )
+            }
+            account.lifetime?.let {
+                Text("${money(it)} pontos lifetime", style = Xau.type.caption, color = c.textSecondary)
             }
             Text("❄ Congelada · nada é enviado", style = Xau.type.caption, color = ice)
         }
