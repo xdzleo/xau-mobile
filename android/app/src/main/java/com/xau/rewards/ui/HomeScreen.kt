@@ -91,6 +91,7 @@ fun HomeScreen(
     onOpenStore: (Account) -> Unit = {},
     onOpenOffers: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
+    onOpenLog: () -> Unit = {},
     onRetry: () -> Unit = {},
     onNextFarmPool: () -> Unit = {},
     onToggleFrozen: (String) -> Unit = {},
@@ -179,7 +180,7 @@ fun HomeScreen(
             }
 
             Box(Modifier.entrance(2, rise = 90.dp)) {
-                NavBar(onOpenOffers = onOpenOffers, onOpenSettings = onOpenSettings)
+                NavBar(onOpenOffers = onOpenOffers, onOpenLog = onOpenLog, onOpenSettings = onOpenSettings)
             }
         }
     }
@@ -786,6 +787,17 @@ private fun FrozenCard(account: Account, onLongPress: () -> Unit, onUnfreeze: ()
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            // Stored on the phone, so showing it asks nothing of anyone.
+            account.email?.let {
+                Text(
+                    it,
+                    style = Xau.type.caption,
+                    color = c.textMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.copyOnTap(it),
+                )
+            }
             // The balance from before it was frozen; refreshed on unfreeze.
             account.balance?.let {
                 Text(
@@ -1040,7 +1052,7 @@ private fun AccountCardSkeleton() {
  * adds to.
  */
 @Composable
-private fun NavBar(onOpenOffers: () -> Unit, onOpenSettings: () -> Unit) {
+private fun NavBar(onOpenOffers: () -> Unit, onOpenLog: () -> Unit, onOpenSettings: () -> Unit) {
     val c = Xau.colors
     val shape = RoundedCornerShape(Radius.pill)
     Row(
@@ -1056,7 +1068,8 @@ private fun NavBar(onOpenOffers: () -> Unit, onOpenSettings: () -> Unit) {
     ) {
         NavItem(R.drawable.ic_home, "Início", selected = true, onClick = {}, modifier = Modifier.weight(1f))
         NavItem(R.drawable.ic_books, "Vantagens", selected = false, onClick = onOpenOffers, modifier = Modifier.weight(1f))
-        NavItem(R.drawable.ic_gear, "Configurações", selected = false, onClick = onOpenSettings, modifier = Modifier.weight(1f))
+        NavItem(R.drawable.ic_history, "Histórico", selected = false, onClick = onOpenLog, modifier = Modifier.weight(1f))
+        NavItem(R.drawable.ic_gear, "Ajustes", selected = false, onClick = onOpenSettings, modifier = Modifier.weight(1f))
     }
 }
 

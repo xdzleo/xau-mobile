@@ -102,6 +102,70 @@ pub struct Store {
     /// shown (as such) on its card once it is frozen.
     #[serde(default)]
     pub rewards: BTreeMap<String, CachedRewards>,
+    /// Every Rewards level-up the app has seen, oldest first.
+    #[serde(default)]
+    pub level_ups: Vec<LevelUp>,
+    /// xuid -> the highest balance this account ever showed in the app.
+    #[serde(default)]
+    pub peaks: BTreeMap<String, i64>,
+}
+
+/// One Rewards level-up, as the app noticed it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LevelUp {
+    pub xuid: String,
+    pub gamertag: String,
+    pub gamerpic: String,
+    pub from: i64,
+    pub to: i64,
+    /// Unix seconds: when a read first showed the new level.
+    pub at: i64,
+}
+
+/// Level-ups kept in the log; the oldest go first.
+const LEVEL_LOG_MAX: usize = 500;
+
+impl Store {
+    /// Take one live Rewards read of `xuid`: keep it for the frozen card,
+    /// raise its peak balance, and log a level-up when the level went up
+    /// since the last read. Returns whether anything changed.
+    pub fn record_read(&mut self, xuid: &str, balance: i64, unclaimed: i64, level: Option<i64>, now: i64) -> bool {
+        let mut changed = false;
+        let before = self.rewards.get(xuid).and_then(|r| r.level);
+        if let (Some(from), Some(to)) = (before, level) {
+            if to > from {
+                let p = self.profiles.get(xuid).cloned().unwrap_or_default();
+                self.level_ups.push(LevelUp {
+                    xuid: xuid.to_string(),
+                    gamertag: if p.gamertag.is_empty() { xuid.to_string() } else { p.gamertag },
+                    gamerpic: p.gamerpic,
+                    from,
+                    to,
+                    at: now,
+                });
+                if self.level_ups.len() > LEVEL_LOG_MAX {
+                    let extra = self.level_ups.len() - LEVEL_LOG_MAX;
+                    self.level_ups.drain(..extra);
+                }
+                changed = true;
+            }
+        }
+        // A read without a level keeps the last known one, so the next
+        // read that has it still compares against something.
+        let r = CachedRewards { balance, unclaimed, level: level.or(before) };
+        if self.rewards.get(xuid) != Some(&r) {
+            self.rewards.insert(xuid.to_string(), r);
+            changed = true;
+        }
+        match self.peaks.get(xuid) {
+            Some(peak) if *peak >= balance => {}
+            _ => {
+                self.peaks.insert(xuid.to_string(), balance);
+                changed = true;
+            }
+        }
+        changed
+    }
 }
 
 /// The last Rewards read of an account, kept for when it may not ask.
@@ -195,6 +259,8 @@ impl Store {
         self.frozen.remove(xuid);
         self.profiles.remove(xuid);
         self.rewards.remove(xuid);
+        self.peaks.remove(xuid);
+        self.level_ups.retain(|l| l.xuid != xuid);
         self.tokens.remove(xuid).is_some()
     }
 
@@ -260,6 +326,39 @@ pub async fn public_ip() -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_level_up_is_logged_once_with_the_cached_profile_and_peak_kept() {
+        let mut s = Store::default();
+        s.profiles.insert(
+            "1".into(),
+            CachedProfile { gamertag: "Leo".into(), gamerpic: "pic".into(), gamerscore: 0 },
+        );
+        // First read: a baseline, nothing to compare with.
+        assert!(s.record_read("1", 100, 0, Some(1), 10));
+        assert!(s.level_ups.is_empty());
+        // Same level, lower balance: the peak stays.
+        s.record_read("1", 80, 0, Some(1), 20);
+        assert_eq!(s.peaks["1"], 100);
+        // A read without a level keeps the last known one.
+        s.record_read("1", 90, 0, None, 25);
+        assert!(s.level_ups.is_empty());
+        // Up: logged with the cached name and picture.
+        s.record_read("1", 150, 0, Some(2), 30);
+        assert_eq!(
+            s.level_ups,
+            vec![LevelUp { xuid: "1".into(), gamertag: "Leo".into(), gamerpic: "pic".into(), from: 1, to: 2, at: 30 }]
+        );
+        assert_eq!(s.peaks["1"], 150);
+        // Not again on the next read at the same level, nor on a drop.
+        s.record_read("1", 150, 0, Some(2), 40);
+        s.record_read("1", 150, 0, Some(1), 50);
+        assert_eq!(s.level_ups.len(), 1);
+        // Removing the account removes its history.
+        s.tokens.insert("1".into(), "x".into());
+        s.remove("1");
+        assert!(s.level_ups.is_empty() && s.peaks.is_empty());
+    }
 
     #[test]
     fn signing_in_as_an_existing_account_replaces_rather_than_duplicates() {

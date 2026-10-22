@@ -335,22 +335,26 @@ async fn refresh_all() -> Value {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard.stale = stale;
     }
-    // Keep each live read, so the card can still show it once frozen.
+    record_reads(balances.iter().map(|(x, (b, u, l, ..))| (x.as_str(), *b, *u, *l)));
+    snapshot(&balances).await
+}
+
+/// Keep live Rewards reads: the frozen card's figures, each account's
+/// peak balance, and the level-up log (see `Store::record_read`).
+fn record_reads<'a>(reads: impl IntoIterator<Item = (&'a str, i64, i64, Option<i64>)>) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
     let mut store = Store::load();
     let mut changed = false;
-    for (xuid, (balance, unclaimed, level, ..)) in &balances {
-        let r = accounts::CachedRewards { balance: *balance, unclaimed: *unclaimed, level: *level };
-        if store.rewards.get(xuid) != Some(&r) {
-            store.rewards.insert(xuid.clone(), r);
-            changed = true;
-        }
+    for (xuid, balance, unclaimed, level) in reads {
+        changed |= store.record_read(xuid, balance, unclaimed, level, now);
     }
     if changed {
         if let Err(e) = store.save() {
             tracing::warn!(%e, "rewards cache not saved");
         }
     }
-    snapshot(&balances).await
 }
 
 /// Make a freshly signed-in session live and store it.
@@ -637,7 +641,40 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
             };
             let s = session_of(&xuid)?;
             let info = xau_mobile::rewards(&s).await?;
+            // The farm's level watch reads through here: a level-up it sees
+            // goes in the log like any other.
+            record_reads([(xuid.as_str(), info.balance, info.unclaimed, info.level)]);
             Ok(serde_json::to_value(info)?)
+        }
+
+        // The level-up log, newest first, each with its account's peak.
+        "level_log" => {
+            let store = Store::load();
+            Ok(Value::Array(
+                store
+                    .level_ups
+                    .iter()
+                    .rev()
+                    .map(|l| {
+                        // The newest picture when the account is still here.
+                        let pic = store
+                            .profiles
+                            .get(&l.xuid)
+                            .map(|p| p.gamerpic.clone())
+                            .filter(|p| !p.is_empty())
+                            .unwrap_or_else(|| l.gamerpic.clone());
+                        json!({
+                            "xuid": l.xuid,
+                            "gamertag": l.gamertag,
+                            "gamerpic": pic,
+                            "from": l.from,
+                            "to": l.to,
+                            "at": l.at,
+                            "peak": store.peaks.get(&l.xuid),
+                        })
+                    })
+                    .collect(),
+            ))
         }
 
         "claim" => {

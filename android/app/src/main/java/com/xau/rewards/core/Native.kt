@@ -294,6 +294,20 @@ object Api {
      * One account's Rewards level (1-3), read live. Null when the service
      * did not report one, which is not the same as level 1.
      */
+    /** Every level-up the app has seen, newest first. No request is made. */
+    suspend fun levelLog(): List<LevelUpEntry> =
+        arr("level_log").map {
+            LevelUpEntry(
+                xuid = it.getString("xuid"),
+                gamertag = it.optString("gamertag"),
+                gamerpic = it.optString("gamerpic"),
+                from = it.getLong("from"),
+                to = it.getLong("to"),
+                at = it.getLong("at"),
+                peak = if (it.isNull("peak")) null else it.getLong("peak"),
+            )
+        }
+
     suspend fun rewardsLevel(xuid: String): Long? =
         obj("rewards", JSONObject().put("xuid", xuid)).let {
             if (it.isNull("level")) null else it.getLong("level")
@@ -493,6 +507,18 @@ data class Account(
 )
 
 data class ClaimOutcome(val pointsAdded: Long, val accounts: List<Account>)
+
+/** One Rewards level-up: who, from/to, when (unix seconds), best balance. */
+data class LevelUpEntry(
+    val xuid: String,
+    val gamertag: String,
+    val gamerpic: String,
+    val from: Long,
+    val to: Long,
+    val at: Long,
+    /** The highest balance this account ever showed in the app. */
+    val peak: Long?,
+)
 
 data class LoginOutcome(val accounts: List<Account>, val warning: String?)
 

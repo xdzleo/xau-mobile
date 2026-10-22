@@ -46,6 +46,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.xau.rewards.ui.AccountDetail
 import com.xau.rewards.ui.HomeScreen
+import com.xau.rewards.ui.LogScreen
 import com.xau.rewards.ui.LoginScreen
 import com.xau.rewards.ui.OffersScreen
 import com.xau.rewards.ui.SettingsScreen
@@ -104,6 +105,7 @@ class MainActivity : ComponentActivity() {
                 var storeOf by remember { mutableStateOf<String?>(null) }
                 var showOffers by remember { mutableStateOf(false) }
                 var showSettings by remember { mutableStateOf(false) }
+                var showLog by remember { mutableStateOf(false) }
 
                 // Polling only while the screen is actually in front of
                 // the user; a background poll costs battery to refresh
@@ -136,6 +138,7 @@ class MainActivity : ComponentActivity() {
                         showOffers -> OffersScreen(onBack = { showOffers = false })
 
                         showSettings -> SettingsScreen(onBack = { showSettings = false })
+                        showLog -> LogScreen(onBack = { showLog = false })
 
                         openAccount != null && state.accounts.any { it.xuid == openAccount } ->
                             AccountDetail(
@@ -169,6 +172,7 @@ class MainActivity : ComponentActivity() {
                             onOpenStore = { storeOf = it.xuid },
                             onOpenOffers = { showOffers = true },
                             onOpenSettings = { showSettings = true },
+                            onOpenLog = { showLog = true },
                             onRetry = { vm.refresh() },
                             onNextFarmPool = vm::nextFarmPool,
                             onToggleFrozen = vm::toggleFrozen,
