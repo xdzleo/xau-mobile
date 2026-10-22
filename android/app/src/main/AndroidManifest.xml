@@ -4,7 +4,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- The farm broadcasts presence on a 16-minute cycle. Without a
+    <!-- The farm broadcasts presence for up to 15 minutes. Without a
          foreground service Android freezes the process within minutes of
          the screen going off, and the farm silently stops earning. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

@@ -36,8 +36,9 @@ use xau_core::xbox::farm::{Farm, FarmConfig, FIXED_CONSOLE_TITLES};
 use xau_core::xbox::client::{XboxClient, XboxClientOptions};
 pub use xau_core::xbox::farm::FarmHandle;
 
-/// Cycle length for the presence farm.
-pub const FARM_CYCLE: Duration = Duration::from_secs(16 * 60);
+/// How long one farm run broadcasts presence: up to 15 minutes, then it
+/// ends on its own (one cycle, see `start_farm`).
+pub const FARM_CYCLE: Duration = Duration::from_secs(15 * 60);
 
 /// A signed-in session: the Xbox client plus the xuid every call needs.
 pub struct Session {
@@ -332,7 +333,10 @@ pub fn farm_titles() -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
-/// Start broadcasting presence across the fixed console titles.
+/// Broadcast presence across the 8 fixed console titles for up to
+/// [`FARM_CYCLE`] (15 minutes), then stop on its own. Each ping's outcome
+/// (accepted / denied / rejected / not sent) is in the snapshot's
+/// `presence`, so the screen can say when Xbox refuses it.
 ///
 /// # Errors
 /// Fails if the title list does not satisfy the presence cap.
@@ -343,6 +347,7 @@ pub fn start_farm(session: &Session) -> Result<FarmHandle> {
             .map(|(id, _, _)| (*id).to_string())
             .collect(),
         cycle_duration: FARM_CYCLE,
+        max_cycles: Some(1),
         ..Default::default()
     };
     cfg.validate()?;
@@ -389,8 +394,10 @@ mod tests {
         );
     }
 
+    /// The mission is "play 8 titles for 15 minutes"; the farm runs one
+    /// 15-minute cycle (see `start_farm`'s `max_cycles`) and ends.
     #[test]
-    fn the_farm_cycle_is_sixteen_minutes() {
-        assert_eq!(FARM_CYCLE.as_secs(), 960);
+    fn the_farm_runs_for_fifteen_minutes() {
+        assert_eq!(FARM_CYCLE.as_secs(), 15 * 60);
     }
 }

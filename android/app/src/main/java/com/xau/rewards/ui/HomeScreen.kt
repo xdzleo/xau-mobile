@@ -519,6 +519,18 @@ private fun AccountRow(
         if (account.farming) {
             Spacer(Modifier.height(Space.md))
             MissionProgress(account)
+            // A farm whose pings Xbox refuses still fills its bar; say so,
+            // or the mission looks like it is counting when it is not.
+            farmPresenceProblem(account.farmPresence, account.farmPresenceHttp)?.let { why ->
+                Spacer(Modifier.height(Space.sm))
+                Text(
+                    why,
+                    style = Xau.type.caption,
+                    color = c.danger,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
 
         if (stale) {
@@ -780,6 +792,21 @@ private fun MissionProgress(account: Account) {
                     .background(c.green),
             )
         }
+    }
+}
+
+/**
+ * Why the farm's last ping did not register, in the user's words; null
+ * while Xbox accepts it (or before the first ping).
+ */
+internal fun farmPresenceProblem(status: String?, http: Int?): String? {
+    val code = http?.let { " ($it)" }.orEmpty()
+    return when (status) {
+        "denied" -> "Xbox recusou a presença$code — o farm não está contando"
+        "rejected" -> "Xbox rejeitou a presença$code — o farm não está contando"
+        "not_sent" -> "Presença não enviada — sem conexão com a Xbox"
+        "unknown" -> "Xbox não confirmou a presença$code"
+        else -> null
     }
 }
 

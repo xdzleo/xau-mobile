@@ -90,7 +90,7 @@ of this app that fails silently when it is wrong.
 
 The farm runs on the tokio runtime inside the app process. Android
 freezes a backgrounded process within minutes of screen-off, which would
-stop a 16-minute presence cycle without telling anyone — so `FarmService`
+stop a 15-minute presence farm without telling anyone — so `FarmService`
 holds a foreground notification for exactly as long as a farm runs. The
 service starts no work of its own.
 

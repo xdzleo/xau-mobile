@@ -149,7 +149,8 @@ object Api {
             cycle = r.optLong("cycle"),
             pings = r.optLong("ping_count"),
             elapsedSecs = r.optLong("cycle_elapsed_secs"),
-            totalSecs = r.optLong("cycle_total_secs", 960L),
+            totalSecs = r.optLong("cycle_total_secs", 900L),
+            presence = r.optJSONObject("presence")?.optString("status")?.takeIf { it.isNotEmpty() },
         )
     }
 
@@ -278,6 +279,13 @@ data class Account(
     val farmPercent: Float? = null,
     val farmElapsed: Long? = null,
     val farmTotal: Long? = null,
+    /**
+     * This account's farm, last ping: accepted / denied / rejected /
+     * not_sent / unknown / pending. Null = no farm.
+     */
+    val farmPresence: String? = null,
+    /** HTTP status Xbox answered that ping with, when it answered. */
+    val farmPresenceHttp: Int? = null,
     /** How many activities are still earnable / already settled. */
     val missionsOpen: Int? = null,
     val missionsDone: Int? = null,
@@ -366,6 +374,8 @@ data class FarmState(
     val pings: Long,
     val elapsedSecs: Long,
     val totalSecs: Long,
+    /** Last ping's outcome: accepted / denied / rejected / not_sent / unknown / pending. */
+    val presence: String? = null,
 ) {
     val running: Boolean get() = state == "Farming" || state == "Pinging"
 }
@@ -391,6 +401,8 @@ private fun JSONArray.toAccounts(): List<Account> = map { o ->
         farmPercent = if (o.isNull("farmPercent")) null else o.getDouble("farmPercent").toFloat(),
         farmElapsed = if (o.isNull("farmElapsed")) null else o.getLong("farmElapsed"),
         farmTotal = if (o.isNull("farmTotal")) null else o.getLong("farmTotal"),
+        farmPresence = if (o.isNull("farmPresence")) null else o.getString("farmPresence"),
+        farmPresenceHttp = if (o.isNull("farmPresenceHttp")) null else o.getInt("farmPresenceHttp"),
         missionsOpen = if (o.isNull("missionsOpen")) null else o.getInt("missionsOpen"),
         missionsDone = if (o.isNull("missionsDone")) null else o.getInt("missionsDone"),
         gamepass = if (o.isNull("gamepass")) null else o.getString("gamepass"),

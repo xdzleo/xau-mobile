@@ -26,6 +26,7 @@ use tokio::time;
 
 use crate::error::Result;
 use crate::xbox::constants as c;
+use crate::xbox::presence::{PresenceReport, PresenceStatus};
 use crate::xbox::XboxClient;
 
 #[derive(Debug, Clone)]
@@ -33,6 +34,10 @@ pub struct FarmConfig {
     pub title_ids: Vec<String>,
     pub ping_interval: Duration,
     pub cycle_duration: Duration,
+    /// Stop on its own after this many complete cycles (`None` = run until
+    /// stopped). The phone runs ONE 15-minute cycle: presence for up to
+    /// 15 minutes, then the farm ends by itself.
+    pub max_cycles: Option<u32>,
 }
 
 impl Default for FarmConfig {
@@ -41,6 +46,7 @@ impl Default for FarmConfig {
             title_ids: Vec::new(),
             ping_interval: Duration::from_secs(c::FARM_PING_INTERVAL_SECS),
             cycle_duration: Duration::from_secs(c::FARM_CYCLE_SECS),
+            max_cycles: None,
         }
     }
 }
@@ -63,6 +69,13 @@ impl Default for FarmConfig {
 /// an "Insider" build first — picking the top hit would have farmed the
 /// wrong titles. These IDs are pinned precisely so that guesswork
 /// happens once, here, under review.
+///
+/// Every ID below was checked live: one heartbeat with all eight, then
+/// the presence read-back showed all eight active
+/// (xau-rs `tests/live_presence_titles.rs`). The
+/// Sea of Thieves ID pinned before (66591171) was accepted by the
+/// heartbeat but never shown, alone or first in the list — every farm
+/// with this list ran on seven games — so Halo MCC replaced it.
 pub const FIXED_CONSOLE_TITLES: &[(&str, &str, bool)] = &[
     // (title_id, display name, also_on_pc)
     ("331135949", "Doom Eternal", false),
@@ -72,7 +85,7 @@ pub const FIXED_CONSOLE_TITLES: &[(&str, &str, bool)] = &[
     ("374923716", "Gears 5", true),
     ("2079794073", "Starfield", true),
     ("1842668909", "Forza Motorsport", true),
-    ("66591171", "Sea of Thieves", true),
+    ("1144039928", "Halo: The Master Chief Collection", true),
 ];
 
 /// Hard cap on concurrent presence titles per farm run.
@@ -85,8 +98,7 @@ pub const FIXED_CONSOLE_TITLES: &[(&str, &str, bool)] = &[
 /// inhuman and trivially flagged.
 ///
 /// We re-use `MAX_SIMULTANEOUS_TITLES` (8) — the same ceiling
-/// `compute_tiered_schedule` already enforces for the bit-by-bit
-/// runner. 8 is the cheat-detection-aware safe maximum across
+/// the bit-by-bit runner enforces. 8 is the cheat-detection-aware safe maximum across
 /// all presence-broadcasting paths in the codebase. Wave-7 audit
 /// spoof-farm-H2.
 pub const FARM_MAX_TITLES: usize = crate::plan::bit_by_bit::MAX_SIMULTANEOUS_TITLES;
@@ -155,6 +167,16 @@ pub struct FarmProgress {
     pub errors: u32,
     pub last_error: Option<String>,
     pub titles: Vec<String>,
+    /// Outcome of the most recent heartbeat: accepted, denied (401/403),
+    /// rejected (other 4xx), not sent, or unknown.
+    #[serde(default)]
+    pub presence: PresenceReport,
+    #[serde(default)]
+    pub presence_denied: u32,
+    #[serde(default)]
+    pub presence_rejected: u32,
+    #[serde(default)]
+    pub presence_not_sent: u32,
 }
 
 /// Public handle returned by [`Farm::start`]. Clone freely — it points at the
@@ -224,6 +246,7 @@ impl Farm {
             errors: 0,
             last_error: None,
             titles: config.title_ids.clone(),
+            ..FarmProgress::default()
         };
         let shared = Arc::new(RwLock::new(progress));
         let (stop_tx, stop_rx) = oneshot::channel::<()>();
@@ -298,16 +321,32 @@ async fn run(
             }
         }
 
-        // Cycle complete — increment counter and loop.
-        {
+        // Cycle complete — increment counter, then loop or, past
+        // `max_cycles`, end: presence lapses on its own (Xbox TTL).
+        let done = {
             let mut w = shared
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             w.cycle = w.cycle.saturating_add(1);
             w.percent = 100.0;
-            w.state = FarmState::Farming;
+            let done = reached_max_cycles(config.max_cycles, w.cycle);
+            w.state = if done {
+                FarmState::Stopped
+            } else {
+                FarmState::Farming
+            };
+            done
+        };
+        if done {
+            client.stop_heartbeat(&xuid).await.ok();
+            return;
         }
     }
+}
+
+/// Whether a farm that has completed `cycles` cycles is done.
+fn reached_max_cycles(max_cycles: Option<u32>, cycles: u32) -> bool {
+    max_cycles.is_some_and(|max| cycles >= max)
 }
 
 async fn do_ping(
@@ -321,33 +360,43 @@ async fn do_ping(
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .state = FarmState::Pinging;
 
-    match client.send_heartbeat_bulk(xuid, title_ids).await {
-        Ok(_) => {
-            let mut w = shared
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            w.ping_count = w.ping_count.saturating_add(1);
-            w.last_ping_unix = Some(unix_now());
-            w.last_error = None;
-            w.state = FarmState::Farming;
-        }
-        Err(e) => {
-            let mut w = shared
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            w.errors = w.errors.saturating_add(1);
-            w.last_error = Some(e.to_string());
-            w.state = FarmState::Farming;
-        }
+    let result = client.send_heartbeat_bulk(xuid, title_ids).await;
+    let report = PresenceReport::from_result(&result);
+    if report.status != PresenceStatus::Accepted {
+        tracing::warn!(status = ?report.status, http = ?report.http_status, "farm: {}", report.message());
     }
+    record_ping(
+        &mut shared
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        report,
+    );
 }
 
-fn unix_now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|d| i64::try_from(d.as_secs()).ok())
-        .unwrap_or(0)
+fn record_ping(w: &mut FarmProgress, report: PresenceReport) {
+    match report.status {
+        PresenceStatus::Accepted => {
+            w.ping_count = w.ping_count.saturating_add(1);
+            w.last_ping_unix = report.at_unix;
+            w.last_error = None;
+        }
+        status => {
+            w.errors = w.errors.saturating_add(1);
+            w.last_error = Some(report.message());
+            match status {
+                PresenceStatus::Denied => w.presence_denied = w.presence_denied.saturating_add(1),
+                PresenceStatus::Rejected => {
+                    w.presence_rejected = w.presence_rejected.saturating_add(1);
+                }
+                PresenceStatus::NotSent => {
+                    w.presence_not_sent = w.presence_not_sent.saturating_add(1);
+                }
+                _ => {}
+            }
+        }
+    }
+    w.presence = report;
+    w.state = FarmState::Farming;
 }
 
 // ---------------------------------------------------------------------
@@ -408,6 +457,24 @@ mod tests {
     }
 
     #[test]
+    fn denied_ping_is_counted_and_visible() {
+        let mut p = FarmProgress::default();
+        let denied: Result<()> = Err(crate::error::Error::HttpStatus {
+            status: reqwest::StatusCode::FORBIDDEN,
+            body: String::new(),
+        });
+        record_ping(&mut p, PresenceReport::from_result(&denied));
+        assert_eq!(p.presence.status, PresenceStatus::Denied);
+        assert_eq!((p.errors, p.presence_denied, p.ping_count), (1, 1, 0));
+        assert!(p.last_error.as_deref().unwrap().contains("DENIED"));
+
+        record_ping(&mut p, PresenceReport::from_result(&Ok(())));
+        assert_eq!(p.presence.status, PresenceStatus::Accepted);
+        assert_eq!((p.ping_count, p.presence_denied), (1, 1));
+        assert!(p.last_error.is_none());
+    }
+
+    #[test]
     fn config_validation() {
         let mut c = FarmConfig::default();
         assert!(c.validate().is_err()); // empty title_ids
@@ -427,6 +494,16 @@ mod tests {
     /// Wave-7 audit spoof-farm-H2: lock the new max-titles cap so a
     /// future copy-edit can't accidentally remove it. 8 titles is
     /// the cheat-detection-aware safe ceiling; 9 must be rejected.
+    #[test]
+    fn max_cycles_ends_the_farm_only_when_set() {
+        // The phone: one 15-minute cycle, then done.
+        assert!(!reached_max_cycles(Some(1), 0));
+        assert!(reached_max_cycles(Some(1), 1));
+        // Desktop default: runs until stopped.
+        assert!(!reached_max_cycles(None, 1_000));
+        assert_eq!(FarmConfig::default().max_cycles, None);
+    }
+
     #[test]
     fn config_validation_rejects_oversize_title_list() {
         let mut c = FarmConfig {

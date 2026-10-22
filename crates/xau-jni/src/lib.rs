@@ -124,6 +124,11 @@ fn account_json(xuid: &str, gamertag: &str, pic: &str, score: i64) -> Value {
         "farmElapsed": snap.as_ref().map(|s| s.cycle_elapsed_secs),
         "farmTotal": snap.as_ref().map(|s| s.cycle_total_secs),
         "farmState": snap.as_ref().map(|s| format!("{:?}", s.state)),
+        // The last ping's outcome: accepted / denied / rejected / not_sent
+        // / unknown (pending before the first). A farm Xbox refuses must
+        // not look like it is earning.
+        "farmPresence": snap.as_ref().map(|s| s.presence.status),
+        "farmPresenceHttp": snap.as_ref().and_then(|s| s.presence.http_status),
     })
 }
 
