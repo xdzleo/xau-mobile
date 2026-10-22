@@ -183,6 +183,19 @@ object Api {
             )
         }
 
+    // ----------------------------------------------------------- store
+
+    /** Games matching [query]; pass the page's cursor for the next one. */
+    suspend fun storeSearch(query: String, cursor: String? = null): StorePage =
+        obj("store_search", JSONObject().put("query", query).put("cursor", cursor ?: "")).toStorePage()
+
+    /** What is trending in the Store. */
+    suspend fun storeFeatured(): StorePage = obj("store_featured").toStorePage()
+
+    /** The Store's page for a product, where it is bought. */
+    suspend fun storePurchaseUrl(productId: String): String =
+        obj("store_purchase_url", JSONObject().put("productId", productId)).getString("url")
+
     /** Every farm this process has run, from memory: no request is made. */
     suspend fun farmSummary(): List<FarmRun> =
         arr("farm_summary").map {
@@ -448,6 +461,41 @@ data class OfferCode(
 data class OfferCsvFile(
     val fileName: String,
     val text: String,
+)
+
+/** A game in the Microsoft Store. */
+data class StoreProduct(
+    val productId: String,
+    val title: String,
+    val publisher: String?,
+    val image: String?,
+    /** `R$ 249,00`, or `Gratuito`. */
+    val price: String?,
+    /** The price before a discount, when there is one. */
+    val was: String?,
+    /** `Xbox Game Pass` when a pass includes it. */
+    val pass: String?,
+    val rating: Double?,
+)
+
+data class StorePage(val products: List<StoreProduct>, val cursor: String?)
+
+private fun JSONObject.str(key: String): String? = if (isNull(key)) null else optString(key).ifEmpty { null }
+
+private fun JSONObject.toStorePage(): StorePage = StorePage(
+    products = getJSONArray("products").map {
+        StoreProduct(
+            productId = it.getString("product_id"),
+            title = it.getString("title"),
+            publisher = it.str("publisher"),
+            image = it.str("image"),
+            price = it.str("price"),
+            was = it.str("was"),
+            pass = it.str("pass"),
+            rating = if (it.isNull("rating")) null else it.optDouble("rating"),
+        )
+    },
+    cursor = str("cursor"),
 )
 
 /** One account's farm as the foreground service tracks it. */

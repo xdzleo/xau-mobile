@@ -49,6 +49,7 @@ import com.xau.rewards.ui.HomeScreen
 import com.xau.rewards.ui.LoginScreen
 import com.xau.rewards.ui.OffersScreen
 import com.xau.rewards.ui.SettingsScreen
+import com.xau.rewards.ui.StoreScreen
 import com.xau.rewards.ui.StateBlock
 import com.xau.rewards.ui.entrance
 import com.xau.rewards.ui.theme.Radius
@@ -100,6 +101,7 @@ class MainActivity : ComponentActivity() {
                 val state by vm.state.collectAsStateWithLifecycle()
                 var loggingIn by remember { mutableStateOf(false) }
                 var openAccount by remember { mutableStateOf<String?>(null) }
+                var storeOf by remember { mutableStateOf<String?>(null) }
                 var showOffers by remember { mutableStateOf(false) }
                 var showSettings by remember { mutableStateOf(false) }
 
@@ -141,6 +143,14 @@ class MainActivity : ComponentActivity() {
                                 onBack = { openAccount = null },
                             )
 
+                        storeOf != null && state.accounts.any { it.xuid == storeOf } ->
+                            StoreScreen(
+                                account = state.accounts.first { it.xuid == storeOf },
+                                onBack = { storeOf = null },
+                                onOpenMissions = { openAccount = storeOf },
+                                onRefresh = { vm.refresh(quiet = true) },
+                            )
+
                         !state.booting && !state.signedIn ->
                             Welcome(error = state.fatal) { loggingIn = true }
 
@@ -156,6 +166,7 @@ class MainActivity : ComponentActivity() {
                                 vm.toggleFarm(xuid)
                             },
                             onOpenAccount = { openAccount = it.xuid },
+                            onOpenStore = { storeOf = it.xuid },
                             onOpenOffers = { showOffers = true },
                             onOpenSettings = { showSettings = true },
                             onRetry = { vm.refresh() },

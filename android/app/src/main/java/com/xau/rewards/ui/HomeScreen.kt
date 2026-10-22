@@ -87,6 +87,7 @@ fun HomeScreen(
     onAddAccount: () -> Unit,
     onToggleFarm: (String) -> Unit,
     onOpenAccount: (Account) -> Unit = {},
+    onOpenStore: (Account) -> Unit = {},
     onOpenOffers: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
     onRetry: () -> Unit = {},
@@ -159,6 +160,8 @@ fun HomeScreen(
                                 onLongPress = { pendingRemoval = a },
                                 onToggleFarm = { onToggleFarm(a.xuid) },
                                 onClaim = { onClaim(a.xuid) },
+                                onOpenStore = { onSelect(a.xuid); onOpenStore(a) },
+                                onOpenMissions = { onSelect(a.xuid); onOpenAccount(a) },
                             )
                         }
                     }
@@ -539,6 +542,8 @@ private fun AccountCard(
     onLongPress: () -> Unit,
     onToggleFarm: () -> Unit,
     onClaim: () -> Unit,
+    onOpenStore: () -> Unit,
+    onOpenMissions: () -> Unit,
 ) {
     val c = Xau.colors
     val haptics = LocalHapticFeedback.current
@@ -569,13 +574,18 @@ private fun AccountCard(
             Avatar(account, farming = account.farming)
             Spacer(Modifier.width(Space.md))
             Column(Modifier.weight(1f)) {
-                Text(
-                    account.gamertag.ifEmpty { account.xuid },
-                    style = Xau.type.rowTitle,
-                    color = c.textPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        account.gamertag.ifEmpty { account.xuid },
+                        style = Xau.type.rowTitle,
+                        color = c.textPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Spacer(Modifier.width(Space.sm))
+                    Gamerscore(account.gamerscore)
+                }
                 account.email?.let {
                     Text(
                         it,
@@ -619,29 +629,31 @@ private fun AccountCard(
 
         Spacer(Modifier.height(Space.md))
 
-        Row(verticalAlignment = Alignment.Bottom) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    money(countUp(account.balance)),
-                    style = Xau.type.hero.copy(fontSize = 30.sp),
-                    color = if (stale) c.danger else c.textPrimary,
-                )
-                Text("pontos", style = Xau.type.caption, color = c.textMuted)
-            }
-            account.missionsOpen?.let { open ->
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        "$open",
-                        style = Xau.type.rowFigure,
-                        color = if (open > 0) c.textPrimary else c.textMuted,
-                    )
-                    Text(
-                        if (open == 1) "missão aberta" else "missões abertas",
-                        style = Xau.type.caption,
-                        color = c.textMuted,
-                    )
-                }
-            }
+        Text(
+            money(countUp(account.balance)),
+            style = Xau.type.hero.copy(fontSize = 30.sp),
+            color = if (stale) c.danger else c.textPrimary,
+        )
+        Text("pontos Rewards", style = Xau.type.caption, color = c.textMuted)
+
+        Spacer(Modifier.height(Space.md))
+
+        // The account's two destinations, one tap each.
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+            CardAction(
+                icon = R.drawable.ic_store,
+                label = "Loja",
+                primary = true,
+                onClick = onOpenStore,
+                modifier = Modifier.weight(1f),
+            )
+            CardAction(
+                icon = R.drawable.ic_missions,
+                label = account.missionsOpen?.let { "Missões · $it" } ?: "Missões",
+                primary = false,
+                onClick = onOpenMissions,
+                modifier = Modifier.weight(1f),
+            )
         }
 
         // The mission is "play 8 titles for 15 minutes"; the farm
@@ -696,6 +708,60 @@ private fun AccountCard(
                 )
             }
         }
+    }
+}
+
+/** A pill button on the account card: icon and label. */
+@Composable
+private fun CardAction(
+    icon: Int,
+    label: String,
+    primary: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val c = Xau.colors
+    val shape = RoundedCornerShape(Radius.control)
+    Row(
+        modifier
+            .height(Space.touch)
+            .clip(shape)
+            .background(
+                if (primary) {
+                    Brush.horizontalGradient(listOf(c.greenDeep, Color(0xFF168F16)))
+                } else {
+                    Brush.horizontalGradient(listOf(c.surfaceHigh, c.surfaceHigh))
+                },
+            )
+            .border(1.dp, if (primary) c.green.copy(alpha = 0.5f) else c.outline, shape)
+            .clickable(onClick = onClick),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            painterResource(icon),
+            contentDescription = null,
+            tint = if (primary) Color.White else c.textPrimary,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(Space.sm))
+        Text(label, style = Xau.type.button, color = if (primary) Color.White else c.textPrimary, maxLines = 1)
+    }
+}
+
+/** Gamerscore with the Xbox "G" mark. */
+@Composable
+private fun Gamerscore(score: Long) {
+    val c = Xau.colors
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            Modifier.size(16.dp).clip(RoundedCornerShape(Radius.pill)).background(c.textPrimary),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("G", style = Xau.type.captionStrong.copy(fontSize = 10.sp), color = c.ink)
+        }
+        Spacer(Modifier.width(Space.xs))
+        Text(money(countUp(score)), style = Xau.type.captionStrong, color = c.textPrimary)
     }
 }
 

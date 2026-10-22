@@ -300,9 +300,11 @@ mod tests {
     /// drops its device so signing it in again registers a new one.
     #[test]
     fn each_account_keeps_its_own_device() {
-        let mut s = Store::default();
-        s.device = Some(device("shared"));
-        s.devices.insert("new".into(), device("own"));
+        let mut s = Store {
+            device: Some(device("shared")),
+            devices: [("new".to_string(), device("own"))].into(),
+            ..Default::default()
+        };
         assert_eq!(s.device_of("new").map(|d| d.username.as_str()), Some("own"));
         assert_eq!(s.device_of("old").map(|d| d.username.as_str()), Some("shared"));
         s.put("new", "x");

@@ -153,6 +153,10 @@ dependencies {
     // Document-start scripts for the Windows sign-in page, which reports
     // to `window.external` before any onPageStarted hook could set it.
     implementation("androidx.webkit:webkit:1.12.1")
+    // Real backdrop blur for the store's liquid-glass banner (RenderEffect
+    // on API 31+, a tinted scrim below). 1.2.x is the line built against
+    // Compose 1.7, which this app is on.
+    implementation("dev.chrisbanes.haze:haze:1.2.2")
 
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")

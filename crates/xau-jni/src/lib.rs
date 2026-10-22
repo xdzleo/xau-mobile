@@ -680,6 +680,15 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
         }
 
         // ---- farm ----
+        // ---- Microsoft Store catalogue (public; no account needed) ----
+        "store_search" => {
+            let cursor = arg("cursor");
+            let page = xau_mobile::store::search(&arg("query"), Some(cursor.as_str())).await?;
+            Ok(serde_json::to_value(page)?)
+        }
+        "store_featured" => Ok(serde_json::to_value(xau_mobile::store::featured().await?)?),
+        "store_purchase_url" => Ok(json!({ "url": xau_mobile::store::purchase_url(&arg("productId")) })),
+
         // Every farm this process has run, read from memory only: the
         // foreground service polls this every few seconds for its
         // notification, and must not cost a request each time.
