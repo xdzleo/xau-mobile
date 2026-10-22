@@ -51,9 +51,49 @@ struct State {
     /// goes out for them. Every path to the network for an account passes
     /// through [`State::live_sessions`] or [`session_of`], which skip them.
     frozen: HashSet<String>,
+    /// Each farm's task, so freezing aborts it mid-ping instead of
+    /// waiting for the ping in flight to finish.
+    farm_tasks: HashMap<String, tokio::task::AbortHandle>,
+    /// Per account, `true` once it is frozen. Every request made for an
+    /// account races this (see [`guarded`]), so freezing drops requests
+    /// already in flight and closes their connections.
+    cut: HashMap<String, tokio::sync::watch::Sender<bool>>,
 }
 
+const FROZEN: &str = "conta congelada: descongele para usar";
+
 impl State {
+    fn cut_sender(&mut self, xuid: &str) -> &tokio::sync::watch::Sender<bool> {
+        self.cut
+            .entry(xuid.to_string())
+            .or_insert_with(|| tokio::sync::watch::channel(false).0)
+    }
+
+    /// Freeze `xuid` now: refuse new requests, drop the ones in flight,
+    /// abort its farm, and let go of its session (its HTTP client and
+    /// the connections it kept open go when the last request drops it).
+    fn cut_off(&mut self, xuid: &str) {
+        self.frozen.insert(xuid.to_string());
+        self.cut_sender(xuid).send_replace(true);
+        if let Some(h) = self.farms.remove(xuid) {
+            h.stop();
+        }
+        if let Some(t) = self.farm_tasks.remove(xuid) {
+            t.abort();
+        }
+        self.sessions.remove(xuid);
+        self.stale.remove(xuid);
+        if self.active.as_deref() == Some(xuid) {
+            self.active = self.first_live();
+        }
+    }
+
+    /// Unfreeze `xuid`: requests may go out for it again.
+    fn let_in(&mut self, xuid: &str) {
+        self.frozen.remove(xuid);
+        self.cut_sender(xuid).send_replace(false);
+    }
+
     /// The sessions requests may go out for: every one but the frozen.
     fn live_sessions(&self) -> Vec<Arc<Session>> {
         self.sessions
@@ -65,6 +105,26 @@ impl State {
 
     fn first_live(&self) -> Option<String> {
         self.sessions.keys().find(|x| !self.frozen.contains(*x)).cloned()
+    }
+}
+
+/// Run `fut`, a request made for `xuid`, unless and until that account
+/// is frozen: freezing drops it on the spot, which also closes its
+/// connection, and the call fails with [`FROZEN`].
+async fn guarded<T>(xuid: &str, fut: impl std::future::Future<Output = Result<T>>) -> Result<T> {
+    let mut cut = {
+        let mut guard = state()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if guard.frozen.contains(xuid) {
+            return Err(Error::other(FROZEN));
+        }
+        guard.cut_sender(xuid).subscribe()
+    };
+    tokio::select! {
+        biased;
+        Ok(_) = cut.wait_for(|frozen| *frozen) => Err(Error::other(FROZEN)),
+        r = fut => r,
     }
 }
 
@@ -94,7 +154,7 @@ fn session_of(xuid: &str) -> Result<Arc<Session>> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if guard.frozen.contains(xuid) {
-        return Err(Error::other("conta congelada: descongele para usar"));
+        return Err(Error::other(FROZEN));
     }
     guard
         .sessions
@@ -170,7 +230,12 @@ async fn snapshot(balances: &Balances) -> Value {
     let mut profiles_changed = false;
     let mut out = Vec::with_capacity(sessions.len() + store.frozen.len());
     for s in sessions {
-        let (pic, score) = s.profile_display().await.unwrap_or_default();
+        let Ok((pic, score)) = guarded(s.xuid(), s.profile_display()).await.or_else(|e| {
+            // Frozen meanwhile: its row comes from the cache below.
+            if e.to_string() == FROZEN { Err(e) } else { Ok(Default::default()) }
+        }) else {
+            continue;
+        };
         // Kept for the day this account is frozen and may not ask.
         let cached = accounts::CachedProfile {
             gamertag: s.gamertag().to_string(),
@@ -229,7 +294,10 @@ async fn restore_all() -> Value {
         let mut guard = state()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        guard.frozen = store.frozen.iter().cloned().collect();
+        for x in &store.frozen {
+            guard.frozen.insert(x.clone());
+            guard.cut_sender(x).send_replace(true);
+        }
     }
     for (xuid, xauth) in store.tokens.clone() {
         // Frozen: not even the sign-in check. Its row comes from the cache.
@@ -310,7 +378,9 @@ async fn refresh_all() -> Value {
         // Serial on purpose: these are the same Rewards endpoint under
         // one IP, and firing five at once is what a rate limiter is
         // built to notice.
-        match xau_mobile::rewards(&s).await {
+        match guarded(s.xuid(), xau_mobile::rewards(&s)).await {
+            // Frozen mid-read: no figures, and not "stale" either.
+            Err(e) if e.to_string() == FROZEN => {}
             Ok(info) => {
                 balances.insert(
                     s.xuid().to_string(),
@@ -401,7 +471,7 @@ async fn register_session(
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard.sessions.insert(xuid.clone(), Arc::new(session));
         guard.stale.remove(&xuid);
-        guard.frozen.remove(&xuid);
+        guard.let_in(&xuid);
         guard.active = Some(xuid.clone());
     }
     // A sign-in is live; with one account at a time, the rest freeze.
@@ -434,14 +504,12 @@ fn freeze_all_but(store: &mut Store, keep: &str) {
     let mut guard = state()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Cut the others first: their requests in flight drop here, before
+    // `keep` sends anything.
     for x in &others {
-        guard.frozen.insert(x.clone());
-        if let Some(h) = guard.farms.remove(x) {
-            h.stop();
-        }
-        guard.stale.remove(x);
+        guard.cut_off(x);
     }
-    guard.frozen.remove(keep);
+    guard.let_in(keep);
     if guard.sessions.contains_key(keep) {
         guard.active = Some(keep.to_string());
     } else if guard.active.as_ref().is_some_and(|a| guard.frozen.contains(a)) {
@@ -451,8 +519,26 @@ fn freeze_all_but(store: &mut Store, keep: &str) {
 
 // ------------------------------------------------------------ dispatch
 
-#[allow(clippy::too_many_lines)] // A flat match over the wire protocol; splitting it hides the surface.
+/// Commands about one account race that account's freeze (see
+/// [`guarded`]): freezing it drops the command mid-request.
 async fn dispatch(method: &str, args: &Value) -> Result<Value> {
+    const PER_ACCOUNT: [&str; 5] = ["missions", "rewards", "claim", "farm_start", "store_purchase_form"];
+    if PER_ACCOUNT.contains(&method) {
+        let xuid = args
+            .get("xuid")
+            .and_then(Value::as_str)
+            .filter(|x| !x.is_empty())
+            .map(str::to_string)
+            .or_else(|| active_xuid().ok());
+        if let Some(x) = xuid {
+            return guarded(&x, dispatch_inner(method, args)).await;
+        }
+    }
+    dispatch_inner(method, args).await
+}
+
+#[allow(clippy::too_many_lines)] // A flat match over the wire protocol; splitting it hides the surface.
+async fn dispatch_inner(method: &str, args: &Value) -> Result<Value> {
     let arg = |k: &str| -> String {
         args.get(k)
             .and_then(Value::as_str)
@@ -512,17 +598,12 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
                 let mut guard = state()
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                // Stop the farm first: a detached loop would keep
+                // Cut everything first: a detached loop would keep
                 // broadcasting presence for an account the user just
                 // removed, with no handle left to stop it.
-                if let Some(h) = guard.farms.remove(&xuid) {
-                    h.stop();
-                }
-                guard.sessions.remove(&xuid);
-                guard.stale.remove(&xuid);
-                if guard.active.as_deref() == Some(xuid.as_str()) {
-                    guard.active = guard.first_live();
-                }
+                guard.cut_off(&xuid);
+                guard.frozen.remove(&xuid);
+                guard.cut.remove(&xuid);
             }
             Ok(snapshot(&Balances::new()).await)
         }
@@ -564,8 +645,7 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
                         state()
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .frozen
-                            .insert(keep);
+                            .cut_off(&keep);
                     }
                 }
             }
@@ -583,33 +663,28 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
             if !store.tokens.contains_key(&xuid) {
                 return Err(Error::other("conta não encontrada"));
             }
+            // In memory first, so what is in flight drops now, not after
+            // the disk write.
             if freeze {
                 store.frozen.insert(xuid.clone());
+                state()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .cut_off(&xuid);
             } else {
                 store.frozen.remove(&xuid);
-                // One account at a time: this one in, every other out.
                 if store.single_active {
+                    // One account at a time: every other is cut off
+                    // before this one sends anything.
                     freeze_all_but(&mut store, &xuid);
+                } else {
+                    state()
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .let_in(&xuid);
                 }
             }
             store.save()?;
-            {
-                let mut guard = state()
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if freeze {
-                    guard.frozen.insert(xuid.clone());
-                    if let Some(h) = guard.farms.remove(&xuid) {
-                        h.stop();
-                    }
-                    guard.stale.remove(&xuid);
-                    if guard.active.as_deref() == Some(xuid.as_str()) {
-                        guard.active = guard.first_live();
-                    }
-                } else {
-                    guard.frozen.remove(&xuid);
-                }
-            }
             let needs_session = !freeze
                 && !state()
                     .lock()
@@ -785,13 +860,13 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
             let mut added = 0i64;
             let mut claimed_for = Vec::new();
             for s in sessions {
-                let Ok(info) = xau_mobile::rewards(&s).await else {
+                let Ok(info) = guarded(s.xuid(), xau_mobile::rewards(&s)).await else {
                     continue;
                 };
                 if info.unclaimed <= 0 {
                     continue;
                 }
-                if let Ok(r) = xau_mobile::claim(&s).await {
+                if let Ok(r) = guarded(s.xuid(), xau_mobile::claim(&s)).await {
                     added += r.points_added;
                     if r.points_added > 0 {
                         claimed_for.push(s.gamertag().to_string());
@@ -820,13 +895,13 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
             // so it is fetched once and shared across accounts rather
             // than per account. A failure here costs labels, not data.
             let names = if let Some(first) = sessions.first() {
-                xau_mobile::offer_names(first).await.unwrap_or_default()
+                guarded(first.xuid(), xau_mobile::offer_names(first)).await.unwrap_or_default()
             } else {
                 Default::default()
             };
             let mut out = Vec::new();
             for s in sessions {
-                let (offers, error) = match xau_mobile::offers(&s).await {
+                let (offers, error) = match guarded(s.xuid(), xau_mobile::offers(&s)).await {
                     Ok(o) => (o, None),
                     Err(e) => (Vec::new(), Some(e.to_string())),
                 };
@@ -924,14 +999,14 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
                 guard.live_sessions()
             };
             let names = if let Some(first) = sessions.first() {
-                xau_mobile::offer_names(first).await.unwrap_or_default()
+                guarded(first.xuid(), xau_mobile::offer_names(first)).await.unwrap_or_default()
             } else {
                 Default::default()
             };
             let mut claimed = Vec::new();
             let mut failures = Vec::new();
             for s in sessions {
-                let available = match xau_mobile::offers(&s).await {
+                let available = match guarded(s.xuid(), xau_mobile::offers(&s)).await {
                     Ok(list) => list,
                     Err(e) => {
                         failures.push(json!({ "gamertag": s.gamertag(), "error": e.to_string() }));
@@ -945,7 +1020,10 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
                 {
                     // Serial: these are claims against one account under
                     // one IP, and a burst is what a rate limiter notices.
-                    match xau_mobile::claim_offer(&s, &offer.offer_id).await {
+                    // Cut on a freeze like everything else: a code minted
+                    // but not received still comes back, the next offers
+                    // read rewrites every claimed one to its CSV.
+                    match guarded(s.xuid(), xau_mobile::claim_offer(&s, &offer.offer_id)).await {
                         Ok(done) => {
                             let csv = xau_mobile::offers_csv::write_offer(
                                 s.gamertag(),
@@ -1109,11 +1187,18 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
                     return Ok(json!({ "running": true }));
                 }
             }
-            let handle = xau_mobile::start_farm(&s)?;
+            let (handle, task) = xau_mobile::start_farm(&s)?;
             let mut guard = state()
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            guard.farms.insert(xuid, handle);
+            // Frozen while it was starting: never let it run.
+            if guard.frozen.contains(&xuid) {
+                handle.stop();
+                task.abort();
+                return Err(Error::other(FROZEN));
+            }
+            guard.farms.insert(xuid.clone(), handle);
+            guard.farm_tasks.insert(xuid, task);
             Ok(json!({ "running": true }))
         }
 
@@ -1276,6 +1361,40 @@ mod tests {
         let rt = runtime().expect("runtime");
         let r = rt.block_on(dispatch("select", &json!({ "xuid": "999" })));
         assert!(r.is_err());
+    }
+
+    /// Freezing must cut a request already in flight, not wait for it:
+    /// one that would never end is dropped (its connection with it) the
+    /// moment its account freezes, and nothing starts for it afterwards.
+    #[test]
+    fn freezing_drops_a_request_in_flight() {
+        struct Dropped(Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let rt = runtime().expect("runtime");
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = dropped.clone();
+        let inflight = rt.spawn(async move {
+            let _req = Dropped(flag);
+            guarded("cut-test", std::future::pending::<Result<()>>()).await
+        });
+        rt.block_on(async { tokio::time::sleep(std::time::Duration::from_millis(50)).await });
+        state().lock().unwrap().cut_off("cut-test");
+        let r = rt
+            .block_on(async { tokio::time::timeout(std::time::Duration::from_secs(2), inflight).await })
+            .expect("cut within 2 s")
+            .expect("task");
+        assert_eq!(r.unwrap_err().to_string(), FROZEN);
+        assert!(dropped.load(std::sync::atomic::Ordering::SeqCst), "the request was dropped");
+        // Nothing new starts for a frozen account.
+        let again = rt.block_on(guarded("cut-test", async { Ok(()) }));
+        assert!(again.is_err());
+        // Unfrozen, it goes through again.
+        state().lock().unwrap().let_in("cut-test");
+        assert!(rt.block_on(guarded("cut-test", async { Ok(()) })).is_ok());
     }
 
     /// Farm state for an account with no farm is a real answer, not an

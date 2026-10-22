@@ -385,7 +385,7 @@ pub async fn farm_title_art(session: &Session) -> std::collections::HashMap<Stri
 ///
 /// # Errors
 /// Fails if the title list does not satisfy the presence cap.
-pub fn start_farm(session: &Session) -> Result<FarmHandle> {
+pub fn start_farm(session: &Session) -> Result<(FarmHandle, tokio::task::AbortHandle)> {
     let cfg = FarmConfig {
         title_ids: farm_titles::current().into_iter().map(|t| t.id).collect(),
         cycle_duration: FARM_CYCLE,
@@ -393,11 +393,11 @@ pub fn start_farm(session: &Session) -> Result<FarmHandle> {
         ..Default::default()
     };
     cfg.validate()?;
-    // `start` also spawns the loop task; the JoinHandle is dropped
-    // deliberately — the farm is stopped through the handle, and holding
-    // the join would only matter if we awaited it, which no caller does.
-    let (handle, _task) = Farm::start(session.client.clone(), session.xuid.clone(), cfg)?;
-    Ok(handle)
+    // `start` also spawns the loop task. The handle stops it gracefully;
+    // the abort handle kills it on the spot, ping in flight included,
+    // which is what freezing an account needs.
+    let (handle, task) = Farm::start(session.client.clone(), session.xuid.clone(), cfg)?;
+    Ok((handle, task.abort_handle()))
 }
 
 #[cfg(test)]
