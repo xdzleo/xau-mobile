@@ -97,9 +97,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { Api.refresh() }
             .onSuccess { rows ->
                 _state.update { it.copy(accounts = rows, refreshing = false, fatal = null) }
-                // A farm runs for up to 15 minutes and then ends by itself;
-                // the notification must not outlive the last one.
-                if (rows.none { it.farming }) FarmService.stop(getApplication<Application>())
+                // No FarmService.stop here: the service ends itself once
+                // no farm is left, AFTER posting the "completed" notice —
+                // stopping it from a refresh could swallow that notice.
                 refreshFarm()
                 loadFarmTitles()
                 maybeAutoClaim()

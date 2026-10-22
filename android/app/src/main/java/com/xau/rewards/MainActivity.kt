@@ -1,5 +1,6 @@
 package com.xau.rewards
 
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -7,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -46,6 +48,7 @@ import com.xau.rewards.ui.AccountDetail
 import com.xau.rewards.ui.HomeScreen
 import com.xau.rewards.ui.LoginScreen
 import com.xau.rewards.ui.OffersScreen
+import com.xau.rewards.ui.SettingsScreen
 import com.xau.rewards.ui.StateBlock
 import com.xau.rewards.ui.entrance
 import com.xau.rewards.ui.theme.Radius
@@ -57,6 +60,23 @@ import kotlinx.coroutines.delay
 class MainActivity : ComponentActivity() {
 
     private val vm: AppViewModel by viewModels()
+
+    /**
+     * Android 13+ shows no notification at all until the user allows it,
+     * the farm's progress and its "completed" notice included. Asked when
+     * a farm is switched on, the moment the notifications start to matter.
+     */
+    private val notificationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+
+    private fun askForNotifications() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Called before setContent so the first frame already draws
@@ -81,6 +101,7 @@ class MainActivity : ComponentActivity() {
                 var loggingIn by remember { mutableStateOf(false) }
                 var openAccount by remember { mutableStateOf<String?>(null) }
                 var showOffers by remember { mutableStateOf(false) }
+                var showSettings by remember { mutableStateOf(false) }
 
                 // Polling only while the screen is actually in front of
                 // the user; a background poll costs battery to refresh
@@ -112,6 +133,8 @@ class MainActivity : ComponentActivity() {
 
                         showOffers -> OffersScreen(onBack = { showOffers = false })
 
+                        showSettings -> SettingsScreen(onBack = { showSettings = false })
+
                         openAccount != null && state.accounts.any { it.xuid == openAccount } ->
                             AccountDetail(
                                 account = state.accounts.first { it.xuid == openAccount },
@@ -127,9 +150,14 @@ class MainActivity : ComponentActivity() {
                             onSelect = vm::select,
                             onSignOut = vm::signOut,
                             onAddAccount = { loggingIn = true },
-                            onToggleFarm = vm::toggleFarm,
+                            onToggleFarm = { xuid ->
+                                val switchingOn = state.accounts.none { it.xuid == xuid && it.farming }
+                                if (switchingOn) askForNotifications()
+                                vm.toggleFarm(xuid)
+                            },
                             onOpenAccount = { openAccount = it.xuid },
                             onOpenOffers = { showOffers = true },
+                            onOpenSettings = { showSettings = true },
                             onRetry = { vm.refresh() },
                         )
                     }

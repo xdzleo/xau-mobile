@@ -88,6 +88,7 @@ fun HomeScreen(
     onToggleFarm: (String) -> Unit,
     onOpenAccount: (Account) -> Unit = {},
     onOpenOffers: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
     onRetry: () -> Unit = {},
 ) {
     val c = Xau.colors
@@ -106,15 +107,18 @@ fun HomeScreen(
     ) {
         // The glow behind the header: the one place the brand colour is
         // allowed to be atmosphere rather than signal.
+        // Vertical and ending fully transparent: a radial one cut off by
+        // the box's bottom edge drew a hard line across the list on the
+        // phone.
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(360.dp)
+                .height(460.dp)
                 .background(
-                    Brush.radialGradient(
-                        colors = listOf(c.greenDeep.copy(alpha = 0.45f), Color.Transparent),
-                        center = Offset(180f, -40f),
-                        radius = 900f,
+                    Brush.verticalGradient(
+                        0f to c.greenDeep.copy(alpha = 0.42f),
+                        0.55f to c.greenDeep.copy(alpha = 0.12f),
+                        1f to Color.Transparent,
                     ),
                 ),
         )
@@ -162,7 +166,7 @@ fun HomeScreen(
             }
 
             Box(Modifier.entrance(2, rise = 90.dp)) {
-                NavBar(onAdd = onAddAccount, onOpenOffers = onOpenOffers)
+                NavBar(onOpenOffers = onOpenOffers, onOpenSettings = onOpenSettings)
             }
         }
     }
@@ -867,55 +871,32 @@ private fun AccountCardSkeleton() {
 // ------------------------------------------------------------- nav bar
 
 /**
- * A floating bar with only what works: home, the add-account action in
- * the middle where the thumb lands, and Vantagens. The inert "Atividade"
- * and "Configurações" tabs are gone — a tab that does nothing is a lie
- * the user finds out by tapping it.
+ * A floating bar with only what works: Início, Vantagens, Configurações.
+ * Adding an account lives in the accounts header, next to the list it
+ * adds to.
  */
 @Composable
-private fun NavBar(onAdd: () -> Unit, onOpenOffers: () -> Unit) {
+private fun NavBar(onOpenOffers: () -> Unit, onOpenSettings: () -> Unit) {
     val c = Xau.colors
     val shape = RoundedCornerShape(Radius.pill)
-    Box(
+    Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = Space.xxl, vertical = Space.sm),
-        contentAlignment = Alignment.Center,
+            .padding(horizontal = Space.xxl, vertical = Space.sm)
+            .height(72.dp)
+            .clip(shape)
+            .background(Brush.verticalGradient(listOf(c.surfaceHigh, c.surface)))
+            .border(1.dp, c.outline, shape)
+            .padding(horizontal = Space.sm),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .height(68.dp)
-                .clip(shape)
-                .background(Brush.verticalGradient(listOf(c.surfaceHigh, c.surface)))
-                .border(1.dp, c.outline, shape)
-                .padding(horizontal = Space.sm),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            NavItem(R.drawable.ic_home, "Início", selected = true, onClick = {}, modifier = Modifier.weight(1f))
-            Spacer(Modifier.width(72.dp))
-            NavItem(R.drawable.ic_books, "Vantagens", selected = false, onClick = onOpenOffers, modifier = Modifier.weight(1f))
-        }
-        // The one action that is always available, raised above the bar.
-        Box(
-            Modifier
-                .offset(y = (-6).dp)
-                .size(60.dp)
-                .clip(RoundedCornerShape(Radius.pill))
-                .background(Brush.linearGradient(listOf(c.green, c.greenDeep)))
-                .clickable(onClick = onAdd),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                painterResource(R.drawable.ic_plus),
-                contentDescription = "Adicionar conta",
-                tint = Color.White,
-                modifier = Modifier.size(28.dp),
-            )
-        }
+        NavItem(R.drawable.ic_home, "Início", selected = true, onClick = {}, modifier = Modifier.weight(1f))
+        NavItem(R.drawable.ic_books, "Vantagens", selected = false, onClick = onOpenOffers, modifier = Modifier.weight(1f))
+        NavItem(R.drawable.ic_gear, "Configurações", selected = false, onClick = onOpenSettings, modifier = Modifier.weight(1f))
     }
 }
 
+/** Icon over label; the selected one sits on a lit pill. */
 @Composable
 private fun NavItem(
     icon: Int,
@@ -925,29 +906,25 @@ private fun NavItem(
     modifier: Modifier = Modifier,
 ) {
     val c = Xau.colors
-    Box(modifier, contentAlignment = Alignment.Center) {
-        Row(
+    val tint = if (selected) c.green else c.textSecondary
+    Column(
+        modifier
+            .clip(RoundedCornerShape(Radius.control))
+            .clickable(onClick = onClick)
+            .padding(vertical = Space.xs),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
             Modifier
                 .clip(RoundedCornerShape(Radius.pill))
                 .background(if (selected) c.green.copy(alpha = 0.16f) else Color.Transparent)
-                .clickable(onClick = onClick)
-                .padding(horizontal = Space.lg, vertical = Space.sm + 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(horizontal = Space.lg, vertical = Space.xs),
+            contentAlignment = Alignment.Center,
         ) {
-            Icon(
-                painterResource(icon),
-                contentDescription = label,
-                tint = if (selected) c.green else c.textSecondary,
-                modifier = Modifier.size(20.dp),
-            )
-            Spacer(Modifier.width(Space.sm))
-            Text(
-                label,
-                style = Xau.type.button,
-                color = if (selected) c.green else c.textSecondary,
-                maxLines = 1,
-            )
+            Icon(painterResource(icon), contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
         }
+        Spacer(Modifier.height(2.dp))
+        Text(label, style = Xau.type.captionStrong, color = tint, maxLines = 1)
     }
 }
 

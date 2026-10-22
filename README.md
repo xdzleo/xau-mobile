@@ -41,39 +41,32 @@ Android 8.0 (API 26) or newer.
 
 ## Building
 
-Two steps, because the Rust core and the app use entirely separate
-toolchains.
-
-**1. The core** — needs the Android SDK with NDK 26.3.11579264 and the
-`aarch64-linux-android` Rust target:
+One command, on every CPU core:
 
 ```
-build-android.cmd build -p xau-jni --target aarch64-linux-android --release
+build-apk.cmd             (or ./build-apk.sh from Git Bash)
+build-apk.cmd install     ...and install it on the phone over adb
 ```
 
-**2. The app** — Gradle picks up the freshly built `.so` automatically:
+It builds the Rust core for arm64 with `cargo ndk`, then the app with
+Gradle (which picks the fresh `.so` up by itself). Needed once, in their
+default per-user places, all overridable by environment variable:
 
-```
-build-apk.cmd assembleRelease
-```
+- JDK 21 under `~/.jdks` (`JAVA_HOME`)
+- Android SDK with platform 34, build-tools and an NDK under
+  `%LOCALAPPDATA%\Android\Sdk` (`ANDROID_HOME`, `ANDROID_NDK_HOME`)
+- Gradle 8.9 under `~/.gradle-dist` (`GRADLE`)
+- `cargo install cargo-ndk` and `rustup target add aarch64-linux-android`
 
-Both wrapper scripts are machine-specific and set up toolchains that are
-not on `PATH`. Without them the failures are misleading: the NDK's
-per-target `*-clang.cmd` wrappers are batch files that choke on cargo's
-`-Wl,--version-script=` argument, and `JAVA_HOME` on the author's
-machine points at a JRE with no `javac`.
-
-Release signing reads `android/keystore.properties`, which is not
-committed. Without it a release build simply comes out unsigned.
+Release signing reads `android/keystore.properties` and the key it
+names, neither committed. Without them a release build comes out
+unsigned. The `android` GitHub workflow builds the same APK in CI, signs
+it from the repository secrets, and attaches it to `v*` releases.
 
 ## Status
 
-Builds, links, and packages. The Rust bridge is unit-tested and the APK
-has been verified to contain the native library, the bundled font and a
-launchable activity.
-
-**The UI has not been run on a device yet** — no screenshot review pass
-has happened, so treat the visual result as unverified.
+Runs on a real device (moto g34 5G, Android 15): sign-in, Rewards and
+the presence farm, with Xbox accepting the heartbeat for all 8 titles.
 
 ## Licence
 

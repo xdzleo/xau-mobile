@@ -170,8 +170,18 @@ async fn restore_all() -> Value {
     let mut failures = HashMap::new();
     let mut renewed = false;
     for (xuid, xauth) in store.tokens.clone() {
-        // A Windows sign-in mints a fresh xauth (the stored one dies
-        // after ~16h); the stored xauth is only the fallback.
+        // The stored xauth first: one validation call, so a launch shows
+        // the account in about a second. Only when it has died (~16h) does
+        // a Windows sign-in mint a fresh one, which takes four exchanges.
+        if store.windows.contains_key(&xuid) {
+            if let Ok(s) = xau_mobile::session_from_token(xauth.clone()).await {
+                let mut guard = state()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                guard.sessions.insert(s.xuid().to_string(), Arc::new(s));
+                continue;
+            }
+        }
         if let (Some(device), Some(user)) = (store.device.clone(), store.windows.get(&xuid).cloned()) {
             match xau_mobile::windows_login::restore(&device, user).await {
                 Ok((s, user)) => {
@@ -665,6 +675,32 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
         }
 
         // ---- farm ----
+        // Every farm this process has run, read from memory only: the
+        // foreground service polls this every few seconds for its
+        // notification, and must not cost a request each time.
+        "farm_summary" => {
+            let guard = state()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Ok(Value::Array(
+                guard
+                    .farms
+                    .iter()
+                    .map(|(xuid, h)| {
+                        let s = h.snapshot();
+                        json!({
+                            "xuid": xuid,
+                            "gamertag": guard.sessions.get(xuid).map(|s| s.gamertag().to_string()),
+                            "running": h.is_running(),
+                            "elapsed": s.cycle_elapsed_secs,
+                            "total": s.cycle_total_secs,
+                            "presence": s.presence.status,
+                        })
+                    })
+                    .collect(),
+            ))
+        }
+
         // With box art when an account is signed in to fetch it with;
         // `image` is null otherwise, and the screen falls back to initials.
         "farm_titles" => {

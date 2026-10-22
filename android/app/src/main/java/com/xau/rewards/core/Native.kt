@@ -183,6 +183,19 @@ object Api {
             )
         }
 
+    /** Every farm this process has run, from memory: no request is made. */
+    suspend fun farmSummary(): List<FarmRun> =
+        arr("farm_summary").map {
+            FarmRun(
+                xuid = it.getString("xuid"),
+                gamertag = if (it.isNull("gamertag")) null else it.getString("gamertag"),
+                running = it.getBoolean("running"),
+                elapsed = it.optLong("elapsed"),
+                total = it.optLong("total"),
+                presence = if (it.isNull("presence")) null else it.getString("presence"),
+            )
+        }
+
     suspend fun farmStart(xuid: String) {
         obj("farm_start", JSONObject().put("xuid", xuid))
     }
@@ -436,6 +449,20 @@ data class OfferCsvFile(
     val fileName: String,
     val text: String,
 )
+
+/** One account's farm as the foreground service tracks it. */
+data class FarmRun(
+    val xuid: String,
+    val gamertag: String?,
+    val running: Boolean,
+    val elapsed: Long,
+    val total: Long,
+    /** accepted / denied / rejected / not_sent / unknown. */
+    val presence: String?,
+) {
+    /** Ran its whole cycle, as opposed to being switched off early. */
+    val completed: Boolean get() = !running && total > 0 && elapsed >= total - 5
+}
 
 /** One of the farm's titles; `image` is its box art, when titlehub had one. */
 data class FarmTitle(val titleId: String, val name: String, val image: String? = null)
