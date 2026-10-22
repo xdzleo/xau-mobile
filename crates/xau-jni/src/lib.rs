@@ -774,6 +774,10 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
             ))
         }
 
+        // Every code ever claimed, grouped by reward. From the CSVs, so
+        // it holds what this app recorded on any run, for any account.
+        "offer_history" => Ok(serde_json::to_value(xau_mobile::offers_csv::history()?)?),
+
         // The same rows as a file the user can keep. The text crosses
         // the bridge rather than a path: the CSVs live in the app's
         // private directory, which nothing else on the phone can open,

@@ -47,6 +47,7 @@ import com.xau.rewards.core.AccountOffers
 import com.xau.rewards.core.Api
 import com.xau.rewards.core.ClaimOffersResult
 import com.xau.rewards.core.OfferCode
+import com.xau.rewards.core.OfferHistoryGroup
 import com.xau.rewards.ui.theme.Radius
 import com.xau.rewards.ui.theme.Space
 import com.xau.rewards.ui.theme.Xau
@@ -84,6 +85,7 @@ fun OffersScreen(onBack: () -> Unit) {
     // The id, not the group: a claim from the detail reloads the list,
     // and the detail must then show the counts that came back.
     var openId by remember { mutableStateOf<String?>(null) }
+    var showHistory by remember { mutableStateOf(false) }
 
     suspend fun load() {
         runCatching { Api.offersAll() }
@@ -93,7 +95,20 @@ fun OffersScreen(onBack: () -> Unit) {
 
     LaunchedEffect(Unit) { load() }
 
-    BackHandler { if (openId != null) openId = null else onBack() }
+    BackHandler {
+        when {
+            showHistory -> showHistory = false
+            openId != null -> openId = null
+            else -> onBack()
+        }
+    }
+
+    if (showHistory) {
+        OfferHistoryScreen(onBack = { showHistory = false }) {
+            clipboard.setText(AnnotatedString(it))
+        }
+        return
+    }
 
     val groups = remember(accounts) { group(accounts.orEmpty()) }
 
@@ -142,6 +157,7 @@ fun OffersScreen(onBack: () -> Unit) {
             accounts = accounts.orEmpty().size - failed.size,
             claiming = claiming,
             onClaim = { confirming = true },
+            onHistory = { showHistory = true },
         )
 
         when {
@@ -240,6 +256,7 @@ private fun Header(
     accounts: Int,
     claiming: Boolean,
     onClaim: () -> Unit,
+    onHistory: () -> Unit,
 ) {
     val c = Xau.colors
     Column {
@@ -260,6 +277,19 @@ private fun Header(
                     style = Xau.type.caption,
                     color = c.textSecondary,
                 )
+            }
+            // Always reachable, even while the live list is loading or
+            // has failed: the history is read from disk, not the network.
+            Box(
+                Modifier
+                    .height(Space.touch)
+                    .clip(RoundedCornerShape(Radius.pill))
+                    .background(c.surfaceHigh)
+                    .clickable(onClick = onHistory)
+                    .padding(horizontal = Space.lg),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("Resgatados", style = Xau.type.button, color = c.textPrimary)
             }
         }
 
@@ -667,6 +697,144 @@ private fun OfferCodesScreen(
     }
 }
 
+// -------------------------------------------------------------- history
+
+/**
+ * Every code ever claimed, every account, every month, by reward.
+ *
+ * The live list only knows what the service still returns for the
+ * accounts signed in right now. This is the record: the CSVs on the
+ * device, so a Discord link from three renewals ago — or from an
+ * account since removed — is still here under "Discord Nitro".
+ */
+@Composable
+private fun OfferHistoryScreen(onBack: () -> Unit, onCopy: (String) -> Unit) {
+    val c = Xau.colors
+    val scope = rememberCoroutineScope()
+    var groups by remember { mutableStateOf<List<OfferHistoryGroup>?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    // "group:row" of the code just copied; "group:*" for a whole group.
+    var copied by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        runCatching { Api.offerHistory() }
+            .onSuccess { groups = it }
+            .onFailure { error = it.message }
+    }
+
+    fun flash(key: String) {
+        copied = key
+        scope.launch {
+            kotlinx.coroutines.delay(1_600)
+            if (copied == key) copied = null
+        }
+    }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(c.ink)
+            .windowInsetsPadding(WindowInsets.safeDrawing),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(Space.gutter),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.size(Space.touch).clip(RoundedCornerShape(Radius.pill))
+                    .clickable(onClick = onBack),
+                contentAlignment = Alignment.Center,
+            ) { Text("‹", style = Xau.type.hero, color = c.textPrimary) }
+            Spacer(Modifier.width(Space.sm))
+            Column(Modifier.weight(1f)) {
+                Text("Resgatados", style = Xau.type.section, color = c.textPrimary)
+                Text(
+                    groups?.let { g ->
+                        val n = g.sumOf { it.codes.size }
+                        "${plural(n, "1 código", "$n códigos")} em " +
+                            plural(g.size, "1 vantagem", "${g.size} vantagens")
+                    } ?: "lendo os CSVs…",
+                    style = Xau.type.caption,
+                    color = c.textSecondary,
+                )
+            }
+        }
+
+        val list = groups
+        when {
+            error != null -> StateBlock(
+                title = "Não foi possível ler os resgates",
+                detail = error.orEmpty(),
+                tone = c.danger,
+            )
+
+            list == null -> Column(
+                Modifier.fillMaxWidth().padding(Space.gutter),
+                verticalArrangement = Arrangement.spacedBy(Space.md),
+            ) { repeat(3) { DotLeader(220.dp) } }
+
+            list.isEmpty() -> StateBlock(
+                title = "Nenhum resgate ainda",
+                detail = "Cada vantagem resgatada por este app fica salva aqui, " +
+                    "com o código ou link, para sempre.",
+            )
+
+            else -> LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    start = Space.gutter, end = Space.gutter, bottom = Space.xxl,
+                ),
+                verticalArrangement = Arrangement.spacedBy(Space.sm),
+            ) {
+                list.forEachIndexed { gi, g ->
+                    item(key = "h$gi") {
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = Space.md),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    g.title.ifBlank { prettyType(g.resourceType) },
+                                    style = Xau.type.rowTitle,
+                                    color = c.textPrimary,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    plural(g.codes.size, "1 código", "${g.codes.size} códigos"),
+                                    style = Xau.type.caption,
+                                    color = c.textMuted,
+                                )
+                            }
+                            Spacer(Modifier.width(Space.sm))
+                            val codes = g.codes.map { it.code }.filter { it.isNotBlank() }
+                            Action(
+                                if (copied == "$gi:*") "Copiado" else "Copiar tudo",
+                            ) {
+                                // One per line, same as the reward's own screen.
+                                onCopy(codes.joinToString("\n"))
+                                flash("$gi:*")
+                            }
+                        }
+                    }
+                    g.codes.forEachIndexed { ci, code ->
+                        item(key = "c$gi:$ci") {
+                            CodeRow(
+                                OfferCode(code.gamertag, code.code, code.claimedDate),
+                                justCopied = copied == "$gi:$ci",
+                                showAccount = true,
+                            ) {
+                                onCopy(code.code)
+                                flash("$gi:$ci")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /** One of the screen's two actions. Same weight, same shape. */
 @Composable
 private fun Action(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
@@ -701,7 +869,12 @@ private fun CodesHeader() {
 }
 
 @Composable
-private fun CodeRow(r: OfferCode, justCopied: Boolean, onCopy: () -> Unit) {
+private fun CodeRow(
+    r: OfferCode,
+    justCopied: Boolean,
+    showAccount: Boolean = false,
+    onCopy: () -> Unit,
+) {
     val c = Xau.colors
     Column(
         Modifier
@@ -724,7 +897,17 @@ private fun CodeRow(r: OfferCode, justCopied: Boolean, onCopy: () -> Unit) {
         )
         Spacer(Modifier.height(Space.sm))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(prettyDate(r.claimedDate), style = Xau.type.caption, color = c.textSecondary)
+            Text(
+                if (showAccount && r.gamertag.isNotBlank()) {
+                    "${r.gamertag} · ${prettyDate(r.claimedDate)}"
+                } else {
+                    prettyDate(r.claimedDate)
+                },
+                style = Xau.type.caption,
+                color = c.textSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
             Spacer(Modifier.weight(1f))
             Text(
                 if (justCopied) "copiado" else "copiar",

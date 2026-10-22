@@ -399,6 +399,26 @@ object Api {
         )
     }
 
+    /** Every code ever claimed, grouped by reward name, newest first. */
+    suspend fun offerHistory(): List<OfferHistoryGroup> =
+        arr("offer_history").map { g ->
+            OfferHistoryGroup(
+                title = g.optString("title"),
+                resourceType = g.optString("resource_type").ifBlank { null },
+                codes = g.getJSONArray("codes").let { list ->
+                    (0 until list.length()).map { i ->
+                        val c = list.getJSONObject(i)
+                        OfferHistoryCode(
+                            gamertag = c.optString("gamertag"),
+                            offerId = c.optString("offer_id"),
+                            code = c.optString("code"),
+                            claimedDate = c.optString("claimed_date"),
+                        )
+                    }
+                },
+            )
+        }
+
     /** Codes recorded for one offer, newest first, across all accounts. */
     suspend fun offerCodes(offerId: String): List<OfferCode> =
         arr("offer_codes", JSONObject().put("offerId", offerId)).map {
@@ -579,6 +599,21 @@ data class ClaimOffersResult(
 data class OfferCode(
     val gamertag: String,
     /** The link or store token the claim minted. */
+    val code: String,
+    val claimedDate: String,
+)
+
+/** One reward in the claim history, with every code it ever minted. */
+data class OfferHistoryGroup(
+    /** Blank when no build ever had a name for it. */
+    val title: String,
+    val resourceType: String?,
+    val codes: List<OfferHistoryCode>,
+)
+
+data class OfferHistoryCode(
+    val gamertag: String,
+    val offerId: String,
     val code: String,
     val claimedDate: String,
 )
