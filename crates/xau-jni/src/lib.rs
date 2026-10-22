@@ -437,9 +437,9 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
                 arg("xuid")
             };
             let s = session_of(&xuid)?;
-            let info = xau_mobile::rewards(&s).await?;
+            let missions = xau_mobile::missions(&s).await?;
             Ok(Value::Array(
-                info.missions
+                missions
                     .iter()
                     .map(|m| {
                         json!({
@@ -457,6 +457,7 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
                                 "points": s.points,
                                 "done": s.done,
                                 "note": s.note,
+                                "image": s.image,
                             })).collect::<Vec<_>>(),
                             "current": m.current,
                             "count": m.count,
@@ -465,7 +466,8 @@ async fn dispatch(method: &str, args: &Value) -> Result<Value> {
                             "locked": m.locked,
                             "requirement": m.requirement,
                             "failed": m.failed,
-                            "images": m.images,
+                            "thumbnail": m.thumbnail,
+                            "resetDate": m.reset_date,
                         })
                     })
                     .collect::<Vec<_>>(),

@@ -251,6 +251,7 @@ object Api {
                             points = s.optLong("points"),
                             done = s.optBoolean("done"),
                             note = if (s.isNull("note")) null else s.optString("note"),
+                            image = if (s.isNull("image")) null else s.optString("image"),
                         )
                     }
                 }.orEmpty(),
@@ -261,9 +262,8 @@ object Api {
                 locked = it.optBoolean("locked"),
                 requirement = if (it.isNull("requirement")) null else it.optString("requirement"),
                 failed = it.optBoolean("failed"),
-                images = it.optJSONArray("images")?.let { a ->
-                    (0 until a.length()).map { i -> a.getString(i) }
-                }.orEmpty(),
+                thumbnail = if (it.isNull("thumbnail")) null else it.optString("thumbnail"),
+                resetDate = if (it.isNull("resetDate")) null else it.optString("resetDate"),
             )
         }
 
@@ -447,7 +447,10 @@ data class Mission(
     val requirement: String? = null,
     /** The week was lost: "Try again next week". */
     val failed: Boolean = false,
-    val images: List<String> = emptyList(),
+    /** The mission's own tile art. */
+    val thumbnail: String? = null,
+    /** ISO-8601 end of the period: the page's "9d left". */
+    val resetDate: String? = null,
 )
 
 data class MissionStep(
@@ -455,6 +458,8 @@ data class MissionStep(
     val points: Long,
     val done: Boolean,
     val note: String?,
+    /** Box art of the game that filled this pack slot. */
+    val image: String? = null,
 )
 
 data class Offer(

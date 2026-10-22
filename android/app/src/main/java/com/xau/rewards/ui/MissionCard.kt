@@ -57,7 +57,7 @@ fun MissionCard(m: Mission) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (m.kind == "single") {
-                val art = m.images.firstOrNull()
+                val art = m.thumbnail
                 if (art != null || m.locked) {
                     Thumb(art, m.locked)
                     Spacer(Modifier.width(Space.md))
@@ -105,7 +105,7 @@ fun MissionCard(m: Mission) {
                     m.steps.forEachIndexed { i, s ->
                         StepBox(
                             step = s,
-                            label = s.label.ifEmpty { "Dia ${i + 1}" },
+                            label = ptBr(s.label).ifEmpty { "Dia ${i + 1}" },
                             current = i == m.current,
                             modifier = Modifier.weight(if (s.points > 0 || s.note != null) 1.6f else 1f),
                         )
@@ -206,7 +206,7 @@ private fun StepBox(step: MissionStep, label: String, current: Boolean, modifier
             Text("+${money(step.points)}", style = Xau.type.captionStrong, color = c.textPrimary, maxLines = 1)
         }
         if (step.note != null) {
-            Text(step.note, style = Xau.type.caption, color = c.textSecondary, maxLines = 2)
+            Text(ptBr(step.note), style = Xau.type.caption, color = c.textSecondary, maxLines = 2)
         }
         Spacer(Modifier.weight(1f, fill = false).height(Space.xs))
         StatusDot(step.done)
@@ -214,57 +214,43 @@ private fun StepBox(step: MissionStep, label: String, current: Boolean, modifier
 }
 
 /**
- * The games a monthly pack counts, then numbered slots for whatever the
- * payload had no cover for, so the row always shows the full target.
- * The slot after the last played game is outlined, like the official page.
+ * A monthly pack's game slots: the cover of each game already played,
+ * the slot number for the rest, and the next slot outlined — the same
+ * row the official page shows.
  */
 @Composable
 private fun PackRow(m: Mission, modifier: Modifier) {
     val c = Xau.colors
-    val target = m.target ?: m.images.size
-    val played = m.count ?: 0
     Row(
         modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
-        for (i in 0 until maxOf(target, m.images.size)) {
+        m.steps.forEachIndexed { i, s ->
             val shape = RoundedCornerShape(Radius.control)
-            val outline = when {
-                i == played && m.current != null -> c.green
-                else -> c.outline
-            }
+            val next = i == m.current
             Box(
                 Modifier
-                    .size(56.dp)
+                    .size(64.dp)
                     .clip(shape)
                     .background(c.surfaceHigh)
-                    .border(if (outline == c.green) 1.5.dp else 1.dp, outline, shape),
+                    .border(if (next) 1.5.dp else 1.dp, if (next) c.green else c.outline, shape),
                 contentAlignment = Alignment.Center,
             ) {
-                val art = m.images.getOrNull(i)
-                if (art != null) {
+                if (s.image != null) {
                     AsyncImage(
-                        model = art,
+                        model = s.image,
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize(),
                     )
+                } else if (s.done) {
+                    // Played, but titlehub had no picture for it.
+                    StatusDot(true)
                 } else {
-                    Text("${i + 1}", style = Xau.type.captionStrong, color = c.textSecondary)
-                }
-                if (i < played) {
-                    Box(Modifier.align(Alignment.BottomEnd).padding(Space.xs)) { StatusDot(true) }
+                    Text("${i + 1}", style = Xau.type.captionStrong, color = c.textPrimary)
                 }
             }
         }
-    }
-    if (m.target != null) {
-        Spacer(Modifier.height(Space.xs))
-        Text(
-            "${played.coerceAtMost(m.target)}/${m.target} jogos",
-            style = Xau.type.caption,
-            color = if (played > 0) c.green else c.textSecondary,
-        )
     }
 }
 
@@ -291,14 +277,14 @@ private fun Bar(fraction: Float, tint: Color) {
 }
 
 /**
- * The bottom-right line of the official card: "Requires Game Pass
- * subscription 🔒 +40", "Try again next week ✕ +110", "Claimed ✓ 6", or
- * how far a streak has got.
+ * The footer of the official card. Left, the time the period has left
+ * ("⏱ 9d left"); right, the outcome: "Requires Game Pass subscription
+ * 🔒 +40", "Try again next week ✕ +110" or "Claimed ✓ 80".
  */
 @Composable
 private fun StatusLine(m: Mission) {
     val c = Xau.colors
-    val (text, glyph, tint) = when {
+    val outcome: Triple<String, Int?, Color>? = when {
         m.locked -> Triple(
             m.requirement ?: if (mentionsGamePass(m)) "Requer assinatura Game Pass" else m.label.ifEmpty { "Bloqueada" },
             R.drawable.ic_lock,
@@ -306,31 +292,67 @@ private fun StatusLine(m: Mission) {
         )
         m.failed -> Triple("Tente na próxima semana", null, c.danger)
         m.claimed != null && m.claimed > 0 -> Triple("Resgatado", R.drawable.ic_check, c.green)
-        m.kind == "streak" && m.target != null -> Triple("${m.count ?: 0}/${m.target} dias", null, c.textSecondary)
-        else -> return
+        m.kind != "single" && m.target != null -> Triple(
+            "${m.count ?: 0}/${m.target} ${if (m.kind == "pack") "jogos" else "dias"}",
+            null,
+            c.textSecondary,
+        )
+        else -> null
     }
+    // A finished or lost period has nothing left to count down.
+    val left = if (m.locked || m.failed || m.done) null else daysLeft(m.resetDate)
+    if (outcome == null && left == null) return
+
     val figure = when {
         m.locked || m.failed -> "+${money(m.points)}"
         m.claimed != null && m.claimed > 0 -> money(m.claimed)
         else -> null
     }
     Spacer(Modifier.height(Space.md))
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-        Text(text, style = Xau.type.caption, color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-        if (glyph != null || m.failed) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        if (left != null) {
+            Icon(
+                painterResource(R.drawable.ic_clock),
+                contentDescription = null,
+                tint = c.textSecondary,
+                modifier = Modifier.size(14.dp),
+            )
             Spacer(Modifier.width(Space.xs))
-            if (glyph != null) {
-                Icon(painterResource(glyph), contentDescription = null, tint = tint, modifier = Modifier.size(14.dp))
-            } else {
-                Text("✕", style = Xau.type.captionStrong, color = tint)
-            }
+            Text(left, style = Xau.type.caption, color = c.textSecondary, maxLines = 1)
         }
-        if (figure != null) {
-            Spacer(Modifier.width(Space.xs))
-            Text(figure, style = Xau.type.captionStrong, color = c.textPrimary)
+        Spacer(Modifier.weight(1f))
+        if (outcome != null) {
+            val (text, glyph, tint) = outcome
+            Text(text, style = Xau.type.caption, color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            if (glyph != null || m.failed) {
+                Spacer(Modifier.width(Space.xs))
+                if (glyph != null) {
+                    Icon(painterResource(glyph), contentDescription = null, tint = tint, modifier = Modifier.size(14.dp))
+                } else {
+                    Text("✕", style = Xau.type.captionStrong, color = tint)
+                }
+            }
+            if (figure != null) {
+                Spacer(Modifier.width(Space.xs))
+                Text(figure, style = Xau.type.captionStrong, color = c.textPrimary)
+            }
         }
     }
 }
+
+/** "9d restantes" until an ISO-8601 reset, rounded up like the page. */
+private fun daysLeft(iso: String?): String? {
+    val end = iso?.let { runCatching { java.time.Instant.parse(it) }.getOrNull() } ?: return null
+    val secs = java.time.Duration.between(java.time.Instant.now(), end).seconds
+    if (secs <= 0) return null
+    val hours = (secs + 3599) / 3600
+    return if (hours < 24) "${hours}h restantes" else "${(hours + 23) / 24}d restantes"
+}
+
+/** The service answers in English; the app speaks Portuguese. */
+private fun ptBr(s: String): String =
+    s.replace(Regex("""^Day (\d+)$"""), "Dia $1")
+        .replace("Next week", "Próx. semana")
 
 private fun mentionsGamePass(m: Mission): Boolean =
     listOf(m.title, m.id, m.description).any {
