@@ -57,6 +57,26 @@ pub struct RewardsInfo {
     /// `None` when the payload did not carry it, which is not 0.
     #[serde(default)]
     pub lifetime: Option<i64>,
+    /// How far the account is towards the next level this period.
+    #[serde(default)]
+    pub tier_progress: Option<TierProgress>,
+    /// The day the account joined Microsoft Rewards, `YYYY-MM-DD`
+    /// (`profile.attributes.created`).
+    #[serde(default)]
+    pub member_since: Option<String>,
+}
+
+/// The account's way to the next Rewards level, as `tiersProfile` states it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TierProgress {
+    /// The level it holds now, e.g. "Membro Silver".
+    pub tier: String,
+    /// The level after it; `None` at the top.
+    pub next: Option<String>,
+    pub progress: i64,
+    pub max: i64,
+    /// What the next level asks for, in the service's own words.
+    pub requirement: Option<String>,
 }
 
 /// One Rewards activity, whatever state it is in.
@@ -410,7 +430,63 @@ fn parse_program_info(v: &serde_json::Value) -> RewardsInfo {
         missions,
         gamepass,
         lifetime: v.get("lifetimeEarnedPoints").and_then(serde_json::Value::as_i64),
+        tier_progress: find_tier_progress(v),
+        member_since: v
+            .get("profile")
+            .and_then(|p| p.get("attributes"))
+            .and_then(|a| a.get("created"))
+            .and_then(serde_json::Value::as_str)
+            .and_then(iso_day),
     }
+}
+
+/// `tiersProfile.programs[]`: the current tier by `currentTierIndex`, the
+/// next one from `allTiers`, and the period's `progressions[0]`.
+fn find_tier_progress(v: &serde_json::Value) -> Option<TierProgress> {
+    let program = v.get("tiersProfile")?.get("programs")?.as_array()?.first()?;
+    let index = usize::try_from(program.get("currentTierIndex")?.as_i64()?).ok()?;
+    let tiers = program.get("allTiers").and_then(serde_json::Value::as_array);
+    // Named by id, in Portuguese: the service answers in whatever language
+    // the request did not ask for ("Silver Member"), and the app is pt-BR.
+    let title = |i: usize| {
+        let t = tiers.and_then(|t| t.get(i))?;
+        let by_id = match t.get("id").and_then(serde_json::Value::as_str) {
+            Some("newLevel1") => Some("Membro"),
+            Some("newLevel2") => Some("Membro Silver"),
+            Some("newLevel3") => Some("Membro Gold"),
+            _ => None,
+        };
+        by_id
+            .map(str::to_string)
+            .or_else(|| t.get("title").and_then(serde_json::Value::as_str).map(str::to_string))
+    };
+    let p = program.get("progressions")?.as_array()?.first()?;
+    Some(TierProgress {
+        tier: title(index)
+            .or_else(|| p.get("title").and_then(serde_json::Value::as_str).map(str::to_string))
+            .unwrap_or_default(),
+        next: title(index + 1),
+        progress: p.get("progress")?.as_i64()?,
+        max: p.get("max")?.as_i64()?.max(1),
+        requirement: p
+            .get("description")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .filter(|s| !s.is_empty()),
+    })
+}
+
+/// The service writes this date two ways: `2018-05-05T12:48:12…` and
+/// `8/2/2018 4:11:25 AM +00:00` (month first). Both → `YYYY-MM-DD`.
+fn iso_day(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.len() >= 10 && raw.as_bytes()[4] == b'-' {
+        return Some(raw[..10].to_string());
+    }
+    let date = raw.split_whitespace().next()?;
+    let mut parts = date.split('/').map(str::parse::<u32>);
+    let (m, d, y) = (parts.next()?.ok()?, parts.next()?.ok()?, parts.next()?.ok()?);
+    ((1..=12).contains(&m) && (1..=31).contains(&d) && y > 1999).then(|| format!("{y:04}-{m:02}-{d:02}"))
 }
 
 /// Walk the payload for EVERY activity, in any state.
@@ -731,6 +807,35 @@ mod tests {
         assert_eq!(info.lifetime, Some(0), "lifetimeEarnedPoints is read");
         let none = parse_program_info(&serde_json::json!({ "balance": 1 }));
         assert_eq!(none.lifetime, None, "absent is unknown, not 0");
+        assert_eq!(none.tier_progress, None);
+        assert_eq!(none.member_since, None);
+    }
+
+    /// The shape of a live response (Silver, 736 of 750 towards Gold).
+    #[test]
+    fn tier_progress_and_member_since_are_read() {
+        let v = serde_json::json!({
+            "profile": { "attributes": { "created": "8/2/2018 4:11:25 AM +00:00" } },
+            "tiersProfile": { "programs": [{
+                "currentTierIndex": 1,
+                "progressions": [{ "title": "Membro Silver", "description": "Ganhe 750 pontos", "progress": 736, "max": 750 }],
+                "allTiers": [{ "title": "Membro" }, { "title": "Membro Silver" }, { "title": "Membro Gold" }]
+            }]}
+        });
+        let info = parse_program_info(&v);
+        assert_eq!(
+            info.tier_progress,
+            Some(TierProgress {
+                tier: "Membro Silver".into(),
+                next: Some("Membro Gold".into()),
+                progress: 736,
+                max: 750,
+                requirement: Some("Ganhe 750 pontos".into()),
+            })
+        );
+        assert_eq!(info.member_since.as_deref(), Some("2018-08-02"), "month first");
+        assert_eq!(iso_day("2018-05-05T12:48:12.4459920+00:00").as_deref(), Some("2018-05-05"));
+        assert_eq!(iso_day("nonsense"), None);
     }
 
     /// The whole point of the status rules: `active` means "you have not

@@ -503,6 +503,10 @@ data class Account(
     val gamepass: String? = null,
     /** Every point the account ever earned. Null until a read reports it. */
     val lifetime: Long? = null,
+    /** Progress towards the next Rewards level, this period. */
+    val tierProgress: TierProgress? = null,
+    /** The day it joined Microsoft Rewards, `YYYY-MM-DD`. */
+    val memberSince: String? = null,
     /** Seen at sign-in. Null for accounts restored from an older store. */
     val email: String? = null,
     val active: Boolean,
@@ -516,6 +520,17 @@ data class Account(
 )
 
 data class ClaimOutcome(val pointsAdded: Long, val accounts: List<Account>)
+
+/** The way to the next Rewards level: `progress` of `max` points this period. */
+data class TierProgress(
+    val tier: String,
+    /** Null at the top level. */
+    val next: String?,
+    val progress: Long,
+    val max: Long,
+    /** What the next level asks for, in the service's words. */
+    val requirement: String?,
+)
 
 /** One Rewards level-up: who, from/to, when (unix seconds), best balance. */
 data class LevelUpEntry(
@@ -753,6 +768,16 @@ private fun JSONArray.toAccounts(): List<Account> = map { o ->
         missionsDone = if (o.isNull("missionsDone")) null else o.getInt("missionsDone"),
         gamepass = if (o.isNull("gamepass")) null else o.getString("gamepass"),
         lifetime = if (!o.has("lifetime") || o.isNull("lifetime")) null else o.getLong("lifetime"),
+        tierProgress = o.optJSONObject("tierProgress")?.let { t ->
+            TierProgress(
+                tier = t.optString("tier"),
+                next = if (t.isNull("next")) null else t.optString("next").ifEmpty { null },
+                progress = t.optLong("progress"),
+                max = t.optLong("max").coerceAtLeast(1),
+                requirement = if (t.isNull("requirement")) null else t.optString("requirement").ifEmpty { null },
+            )
+        },
+        memberSince = if (!o.has("memberSince") || o.isNull("memberSince")) null else o.getString("memberSince"),
         email = if (o.isNull("email")) null else o.getString("email"),
         active = o.optBoolean("active"),
         staleReason = if (o.isNull("staleReason")) null else o.getString("staleReason"),

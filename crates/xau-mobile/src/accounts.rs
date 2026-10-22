@@ -156,8 +156,14 @@ impl Store {
         }
         // A read without a level keeps the last known one, so the next
         // read that has it still compares against something.
-        let lifetime = self.rewards.get(xuid).and_then(|r| r.lifetime);
-        let r = CachedRewards { balance, unclaimed, level: level.or(before), lifetime };
+        let old = self.rewards.get(xuid);
+        let r = CachedRewards {
+            balance,
+            unclaimed,
+            level: level.or(before),
+            lifetime: old.and_then(|r| r.lifetime),
+            member_since: old.and_then(|r| r.member_since.clone()),
+        };
         if self.rewards.get(xuid) != Some(&r) {
             self.rewards.insert(xuid.to_string(), r);
             changed = true;
@@ -172,16 +178,21 @@ impl Store {
         changed
     }
 
-    /// Keep the lifetime total of `xuid`'s last read, for the frozen card.
-    /// A read without one keeps the last known. Call after `record_read`.
-    pub fn record_lifetime(&mut self, xuid: &str, lifetime: Option<i64>) -> bool {
-        match (self.rewards.get_mut(xuid), lifetime) {
-            (Some(r), Some(l)) if r.lifetime != Some(l) => {
-                r.lifetime = Some(l);
-                true
-            }
-            _ => false,
+    /// Keep the lifetime total and join date of `xuid`'s last read, for
+    /// the frozen card. A read without them keeps the last known. Call
+    /// after `record_read`.
+    pub fn record_extras(&mut self, xuid: &str, lifetime: Option<i64>, member_since: Option<String>) -> bool {
+        let Some(r) = self.rewards.get_mut(xuid) else { return false };
+        let mut changed = false;
+        if lifetime.is_some() && r.lifetime != lifetime {
+            r.lifetime = lifetime;
+            changed = true;
         }
+        if member_since.is_some() && r.member_since != member_since {
+            r.member_since = member_since;
+            changed = true;
+        }
+        changed
     }
 }
 
@@ -194,6 +205,9 @@ pub struct CachedRewards {
     /// Every point ever earned (`lifetimeEarnedPoints`).
     #[serde(default)]
     pub lifetime: Option<i64>,
+    /// The day the account joined Rewards, `YYYY-MM-DD`.
+    #[serde(default)]
+    pub member_since: Option<String>,
 }
 
 /// What a row needs to draw an account it may not ask Xbox about.

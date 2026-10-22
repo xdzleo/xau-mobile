@@ -216,7 +216,7 @@ fn account_json(xuid: &str, gamertag: &str, pic: &str, score: i64) -> Value {
 }
 
 /// Describe every live session, merging in the balances held per xuid.
-type Balances = HashMap<String, (i64, i64, Option<i64>, usize, usize, Option<String>, Option<i64>)>;
+type Balances = HashMap<String, xau_core::xbox::client::rewards::RewardsInfo>;
 
 async fn snapshot(balances: &Balances) -> Value {
     let sessions: Vec<Arc<Session>> = {
@@ -247,14 +247,16 @@ async fn snapshot(balances: &Balances) -> Value {
             profiles_changed = true;
         }
         let mut row = account_json(s.xuid(), s.gamertag(), &pic, score);
-        if let Some((balance, unclaimed, level, open, done, gp, lifetime)) = balances.get(s.xuid()) {
-            row["lifetime"] = json!(lifetime);
-            row["balance"] = json!(balance);
-            row["unclaimed"] = json!(unclaimed);
-            row["level"] = json!(level);
-            row["missionsOpen"] = json!(open);
-            row["missionsDone"] = json!(done);
-            row["gamepass"] = json!(gp);
+        if let Some(info) = balances.get(s.xuid()) {
+            row["lifetime"] = json!(info.lifetime);
+            row["balance"] = json!(info.balance);
+            row["unclaimed"] = json!(info.unclaimed);
+            row["level"] = json!(info.level);
+            row["missionsOpen"] = json!(info.missions.iter().filter(|m| m.is_open()).count());
+            row["missionsDone"] = json!(info.missions.iter().filter(|m| m.is_done()).count());
+            row["gamepass"] = json!(info.gamepass);
+            row["tierProgress"] = json!(info.tier_progress);
+            row["memberSince"] = json!(info.member_since);
         }
         out.push(row);
     }
@@ -271,6 +273,7 @@ async fn snapshot(balances: &Balances) -> Value {
             row["unclaimed"] = json!(r.unclaimed);
             row["level"] = json!(r.level);
             row["lifetime"] = json!(r.lifetime);
+            row["memberSince"] = json!(r.member_since);
             row["cached"] = json!(true);
         }
         out.push(row);
@@ -384,18 +387,7 @@ async fn refresh_all() -> Value {
             // Frozen mid-read: no figures, and not "stale" either.
             Err(e) if e.to_string() == FROZEN => {}
             Ok(info) => {
-                balances.insert(
-                    s.xuid().to_string(),
-                    (
-                        info.balance,
-                        info.unclaimed,
-                        info.level,
-                        info.missions.iter().filter(|m| m.is_open()).count(),
-                        info.missions.iter().filter(|m| m.is_done()).count(),
-                        info.gamepass.clone(),
-                        info.lifetime,
-                    ),
-                );
+                balances.insert(s.xuid().to_string(), info);
             }
             Err(e) => {
                 stale.insert(s.xuid().to_string(), e.to_string());
@@ -408,21 +400,23 @@ async fn refresh_all() -> Value {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard.stale = stale;
     }
-    record_reads(balances.iter().map(|(x, (b, u, l, _, _, _, life))| (x.as_str(), *b, *u, *l, *life)));
+    record_reads(balances.iter().map(|(x, info)| (x.as_str(), info)));
     snapshot(&balances).await
 }
 
 /// Keep live Rewards reads: the frozen card's figures, each account's
 /// peak balance, and the level-up log (see `Store::record_read`).
-fn record_reads<'a>(reads: impl IntoIterator<Item = (&'a str, i64, i64, Option<i64>, Option<i64>)>) {
+fn record_reads<'a>(
+    reads: impl IntoIterator<Item = (&'a str, &'a xau_core::xbox::client::rewards::RewardsInfo)>,
+) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
     let mut store = Store::load();
     let mut changed = false;
-    for (xuid, balance, unclaimed, level, lifetime) in reads {
-        changed |= store.record_read(xuid, balance, unclaimed, level, now);
-        changed |= store.record_lifetime(xuid, lifetime);
+    for (xuid, info) in reads {
+        changed |= store.record_read(xuid, info.balance, info.unclaimed, info.level, now);
+        changed |= store.record_extras(xuid, info.lifetime, info.member_since.clone());
     }
     if changed {
         if let Err(e) = store.save() {
@@ -803,7 +797,7 @@ async fn dispatch_inner(method: &str, args: &Value) -> Result<Value> {
             let info = xau_mobile::rewards(&s).await?;
             // The farm's level watch reads through here: a level-up it sees
             // goes in the log like any other.
-            record_reads([(xuid.as_str(), info.balance, info.unclaimed, info.level, info.lifetime)]);
+            record_reads([(xuid.as_str(), &info)]);
             Ok(serde_json::to_value(info)?)
         }
 

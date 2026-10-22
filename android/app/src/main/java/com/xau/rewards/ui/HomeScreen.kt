@@ -65,6 +65,7 @@ import com.xau.rewards.R
 import com.xau.rewards.UiState
 import com.xau.rewards.core.Account
 import com.xau.rewards.core.FarmTitle
+import com.xau.rewards.core.TierProgress
 import com.xau.rewards.ui.theme.Radius
 import com.xau.rewards.ui.theme.Space
 import com.xau.rewards.ui.theme.Xau
@@ -691,6 +692,14 @@ private fun AccountCard(
                 Text("pontos lifetime", style = Xau.type.caption, color = c.textMuted)
             }
         }
+        account.tierProgress?.let {
+            Spacer(Modifier.height(Space.md))
+            TierBar(it)
+        }
+        account.memberSince?.let {
+            Spacer(Modifier.height(Space.sm))
+            Text("Membro do Rewards desde ${brDate(it)}", style = Xau.type.caption, color = c.textMuted)
+        }
 
         Spacer(Modifier.height(Space.md))
 
@@ -767,6 +776,73 @@ private fun AccountCard(
     }
 }
 
+/** A medal before the tier's name: silver for Silver, gold for Gold. */
+private fun medal(tier: String): String = when {
+    tier.contains("Gold", ignoreCase = true) -> "🥇 "
+    tier.contains("Silver", ignoreCase = true) -> "🥈 "
+    else -> ""
+}
+
+/** `2018-08-02` → `02/08/2018`; anything else as it came. */
+private fun brDate(iso: String): String {
+    val p = iso.split('-')
+    return if (p.size == 3) "${p[2]}/${p[1]}/${p[0]}" else iso
+}
+
+/**
+ * The way to the next Rewards level: "Membro Silver → Membro Gold" and
+ * this period's points as a bar, as the service reports them.
+ */
+@Composable
+private fun TierBar(t: TierProgress) {
+    val c = Xau.colors
+    val gold = Color(0xFFFFC94D)
+    val done = t.progress >= t.max
+    val fraction = (t.progress.toFloat() / t.max).coerceIn(0f, 1f)
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                t.next?.let { "${medal(t.tier)}${t.tier} → ${medal(it)}$it" }
+                    ?: "${medal(t.tier)}${t.tier} · nível máximo",
+                style = Xau.type.captionStrong,
+                color = c.textSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                "${money(t.progress)} / ${money(t.max)}",
+                style = Xau.type.captionStrong,
+                color = if (done) c.green else c.textPrimary,
+            )
+        }
+        Spacer(Modifier.height(Space.xs))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(8.dp)
+                .clip(RoundedCornerShape(Radius.pill))
+                .background(c.surfaceHigh),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth(fraction)
+                    .height(8.dp)
+                    .clip(RoundedCornerShape(Radius.pill))
+                    .background(Brush.horizontalGradient(listOf(c.green, gold))),
+            )
+        }
+        if (!done && t.next != null) {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                "Faltam ${money(t.max - t.progress)} pontos neste mês",
+                style = Xau.type.caption,
+                color = c.textMuted,
+            )
+        }
+    }
+}
+
 /**
  * A frozen account: name and picture from the cache, and the way back.
  * No balance or actions, because nothing is asked for it.
@@ -817,6 +893,9 @@ private fun FrozenCard(account: Account, onLongPress: () -> Unit, onUnfreeze: ()
             }
             account.lifetime?.let {
                 Text("${money(it)} pontos lifetime", style = Xau.type.caption, color = c.textSecondary)
+            }
+            account.memberSince?.let {
+                Text("Membro desde ${brDate(it)}", style = Xau.type.caption, color = c.textMuted)
             }
             Text("❄ Congelada · nada é enviado", style = Xau.type.caption, color = ice)
         }
@@ -948,19 +1027,37 @@ private fun Avatar(account: Account, farming: Boolean) {
 @Composable
 private fun LevelBadge(level: Long?, stale: Boolean) {
     val c = Xau.colors
+    // Silver and Gold wear their metal: medal and colour, like the tiers.
+    val silver = Color(0xFFD4DCE4)
+    val gold = Color(0xFFFFC94D)
     val tint = when {
         stale || level == null -> c.textMuted
-        level >= 2L -> c.green
+        level >= 3L -> gold
+        level == 2L -> silver
         else -> c.textSecondary
+    }
+    val medal = when {
+        stale || level == null -> null
+        level >= 3L -> "🥇"
+        level == 2L -> "🥈"
+        else -> null
     }
     Row(
         Modifier
             .clip(RoundedCornerShape(Radius.pill))
             .background(c.surfaceHigh)
+            .then(
+                if (medal != null) Modifier.border(1.dp, tint.copy(alpha = 0.45f), RoundedCornerShape(Radius.pill))
+                else Modifier,
+            )
             .padding(horizontal = Space.sm + 2.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(6.dp).clip(RoundedCornerShape(Radius.pill)).background(tint))
+        if (medal != null) {
+            Text(medal, style = Xau.type.captionStrong)
+        } else {
+            Box(Modifier.size(6.dp).clip(RoundedCornerShape(Radius.pill)).background(tint))
+        }
         Spacer(Modifier.width(Space.xs + 1.dp))
         Text("Nível ${level ?: "—"}", style = Xau.type.captionStrong, color = tint)
     }
