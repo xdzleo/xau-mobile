@@ -365,13 +365,14 @@ object Api {
         }
 
     /**
-     * Claim every available offer across every account.
+     * Claim every available offer across every account — or, given
+     * [offerId], only that one reward, on every account that has it.
      *
      * IRREVERSIBLE. Each reward is written to its own CSV on the device
      * before it is reported here.
      */
-    suspend fun claimOffersAll(): ClaimOffersResult {
-        val r = obj("claim_offers_all")
+    suspend fun claimOffersAll(offerId: String? = null): ClaimOffersResult {
+        val r = obj("claim_offers_all", JSONObject().apply { offerId?.let { put("offerId", it) } })
         val claimed = r.getJSONArray("claimed").let { list ->
             (0 until list.length()).map { i ->
                 val c = list.getJSONObject(i)
