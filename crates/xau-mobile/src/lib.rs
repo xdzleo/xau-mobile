@@ -32,7 +32,7 @@ use xau_core::oauth::{
     classify_redirect, AuthSession, CodeFlow, RedirectOutcome, XboxSignedClient,
 };
 use xau_core::xbox::client::offers::Offer;
-use xau_core::xbox::client::rewards::{ClaimResult, RewardsInfo};
+use xau_core::xbox::client::rewards::{ClaimResult, Mission, RewardsInfo};
 use xau_core::xbox::farm::{Farm, FarmConfig};
 // Re-exported: the JNI bridge holds the handle to stop the farm and to
 // poll snapshots for the progress the Compose screen draws.
@@ -282,6 +282,35 @@ pub fn sign_out() -> Result<()> {
 /// Propagates transport and Xbox-side failures.
 pub async fn rewards(session: &Session) -> Result<RewardsInfo> {
     session.client.get_rewards_info(&session.xuid).await
+}
+
+/// Every mission, with box art on the games that filled a monthly pack.
+///
+/// Rewards names those games only by title id; titlehub has the
+/// pictures. One batch call for all of them, and decoration only: if it
+/// fails the slots stay without art, the missions still load.
+///
+/// # Errors
+/// Propagates transport and Xbox-side failures of the Rewards read.
+pub async fn missions(session: &Session) -> Result<Vec<Mission>> {
+    let mut missions = rewards(session).await?.missions;
+    let mut ids: Vec<String> = missions
+        .iter()
+        .flat_map(|m| m.steps.iter().filter_map(|s| s.source_id.clone()))
+        .collect();
+    ids.sort();
+    ids.dedup();
+    if ids.is_empty() {
+        return Ok(missions);
+    }
+    let art = session.client.get_title_images(&ids).await.unwrap_or_else(|e| {
+        tracing::warn!(%e, "mission title art unavailable");
+        std::collections::HashMap::new()
+    });
+    for step in missions.iter_mut().flat_map(|m| m.steps.iter_mut()) {
+        step.image = step.source_id.as_ref().and_then(|id| art.get(id).cloned());
+    }
+    Ok(missions)
 }
 
 /// Claim every outstanding activity.

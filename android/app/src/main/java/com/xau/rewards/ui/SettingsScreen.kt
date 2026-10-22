@@ -58,6 +58,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     val prefs = remember { Prefs(context) }
     var ongoing by remember { mutableStateOf(prefs.ongoingNotification) }
     var whenDone by remember { mutableStateOf(prefs.notifyWhenDone) }
+    var levelUp by remember { mutableStateOf(prefs.notifyLevelUp) }
     // Re-read on resume: the user may have just allowed or blocked
     // notifications in the system settings this screen sent them to.
     var allowed by remember { mutableStateOf(true) }
@@ -121,6 +122,15 @@ fun SettingsScreen(onBack: () -> Unit) {
                     ) {
                         whenDone = it
                         prefs.notifyWhenDone = it
+                    }
+                    Divider()
+                    Toggle(
+                        title = "Avisar quando subir de nível",
+                        detail = "Durante o farm, uma notificação assim que a conta sobe de nível no Rewards.",
+                        checked = levelUp,
+                    ) {
+                        levelUp = it
+                        prefs.notifyLevelUp = it
                     }
                 }
             }

@@ -290,6 +290,15 @@ object Api {
         )
     }
 
+    /**
+     * One account's Rewards level (1-3), read live. Null when the service
+     * did not report one, which is not the same as level 1.
+     */
+    suspend fun rewardsLevel(xuid: String): Long? =
+        obj("rewards", JSONObject().put("xuid", xuid)).let {
+            if (it.isNull("level")) null else it.getLong("level")
+        }
+
     /** One account's full mission list, read live. */
     suspend fun missions(xuid: String): List<Mission> =
         arr("missions", JSONObject().put("xuid", xuid)).map {
@@ -301,6 +310,29 @@ object Api {
                 progress = it.optInt("progress"),
                 done = it.optBoolean("done"),
                 open = it.optBoolean("open"),
+                description = it.optString("description"),
+                kind = it.optString("kind", "single"),
+                steps = it.optJSONArray("steps")?.let { a ->
+                    (0 until a.length()).map { i ->
+                        val s = a.getJSONObject(i)
+                        MissionStep(
+                            label = s.optString("label"),
+                            points = s.optLong("points"),
+                            done = s.optBoolean("done"),
+                            note = if (s.isNull("note")) null else s.optString("note"),
+                            image = if (s.isNull("image")) null else s.optString("image"),
+                        )
+                    }
+                }.orEmpty(),
+                current = if (it.isNull("current")) null else it.optInt("current"),
+                count = if (it.isNull("count")) null else it.optInt("count"),
+                target = if (it.isNull("target")) null else it.optInt("target"),
+                claimed = if (it.isNull("claimed")) null else it.optLong("claimed"),
+                locked = it.optBoolean("locked"),
+                requirement = if (it.isNull("requirement")) null else it.optString("requirement"),
+                failed = it.optBoolean("failed"),
+                thumbnail = if (it.isNull("thumbnail")) null else it.optString("thumbnail"),
+                resetDate = if (it.isNull("resetDate")) null else it.optString("resetDate"),
             )
         }
 
@@ -475,6 +507,33 @@ data class Mission(
     val progress: Int,
     val done: Boolean,
     val open: Boolean,
+    val description: String = "",
+    /** `streak` (day boxes), `pack` (games to play) or `single`. */
+    val kind: String = "single",
+    val steps: List<MissionStep> = emptyList(),
+    /** Index of today's box; null once finished, lost or locked. */
+    val current: Int? = null,
+    val count: Int? = null,
+    val target: Int? = null,
+    /** Points already credited ("Claimed ✓ 6"). */
+    val claimed: Long? = null,
+    val locked: Boolean = false,
+    val requirement: String? = null,
+    /** The week was lost: "Try again next week". */
+    val failed: Boolean = false,
+    /** The mission's own tile art. */
+    val thumbnail: String? = null,
+    /** ISO-8601 end of the period: the page's "9d left". */
+    val resetDate: String? = null,
+)
+
+data class MissionStep(
+    val label: String,
+    val points: Long,
+    val done: Boolean,
+    val note: String?,
+    /** Box art of the game that filled this pack slot. */
+    val image: String? = null,
 )
 
 data class Offer(
