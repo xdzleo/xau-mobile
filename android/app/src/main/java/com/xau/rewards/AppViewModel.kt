@@ -7,6 +7,7 @@ import com.xau.rewards.core.Account
 import com.xau.rewards.core.Api
 import com.xau.rewards.core.FarmState
 import com.xau.rewards.core.FarmTitle
+import com.xau.rewards.ui.WebProfiles
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,6 +32,8 @@ data class UiState(
     /** Which pool of games the farm uses, 1-based, out of [farmPools]. */
     val farmPool: Int = 1,
     val farmPools: Int = 3,
+    /** "Uma conta ativa por vez" (Ajustes). */
+    val singleActive: Boolean = false,
     val publicIp: String? = null,
     val refreshing: Boolean = false,
     val claimingXuid: String? = null,
@@ -73,6 +76,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 .onSuccess { _state.update { s -> s.copy(accounts = it, booting = false) } }
                 .onFailure { e -> _state.update { s -> s.copy(booting = false, fatal = e.message) } }
             if (_state.value.signedIn) refresh()
+            runCatching { Api.singleActive() }.onSuccess { on -> _state.update { it.copy(singleActive = on) } }
             // The store then opens from cache instead of the network.
             launch { runCatching { Api.storePrewarm() } }
             loadIp()
@@ -133,7 +137,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun signOut(xuid: String) = viewModelScope.launch {
         runCatching { Api.signOut(xuid) }
-            .onSuccess { rows -> _state.update { it.copy(accounts = rows, notice = "Conta removida") } }
+            .onSuccess { rows ->
+                // Everything its pages stored goes with it (main thread).
+                WebProfiles.forget(getApplication(), xuid)
+                _state.update { it.copy(accounts = rows, notice = "Conta removida") }
+            }
             .onFailure { e -> _state.update { it.copy(fatal = e.message) } }
     }
 
@@ -214,6 +222,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         } finally {
             autoClaiming = false
         }
+    }
+
+    /** "Uma conta ativa por vez": on freezes every account but one. */
+    fun setSingleActive(on: Boolean) = viewModelScope.launch {
+        runCatching { Api.setSingleActive(on) }
+            .onSuccess { list ->
+                _state.update {
+                    it.copy(
+                        accounts = list,
+                        singleActive = on,
+                        notice = if (on) "Só uma conta ativa por vez" else "Várias contas ativas liberadas",
+                    )
+                }
+                if (list.none { it.farming }) FarmService.stop(getApplication())
+            }
+            .onFailure { e -> _state.update { it.copy(notice = e.message) } }
     }
 
     /**

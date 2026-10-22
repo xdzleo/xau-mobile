@@ -152,8 +152,29 @@ pub fn write_index() -> Result<PathBuf> {
 /// skipped, with a warning, rather than hiding every other account's
 /// code.
 fn scan_offer(offer_id: &str) -> Result<Vec<Vec<String>>> {
-    let dir = offers_dir()?;
     let suffix = format!("_{offer_id}.csv");
+    let mut rows = read_rows(|name| name.ends_with(&suffix))?;
+    // One row per account, newest kept. Putting the xuid in the
+    // filename left the file an older build wrote and the one this build
+    // writes both answering to the same suffix, and the same code listed
+    // twice reads as two rewards.
+    rows.sort_by(|a, b| a[1].cmp(&b[1]).then_with(|| b[7].cmp(&a[7])));
+    rows.dedup_by(|a, b| a[1] == b[1]);
+
+    // Newest first: the code someone just claimed is the one they want.
+    // The gamertag breaks ties because a batch claim writes several rows
+    // inside the same second, and read_dir order is whatever the
+    // filesystem feels like — the screen would reshuffle between reads.
+    rows.sort_by(|a, b| b[7].cmp(&a[7]).then_with(|| a[0].cmp(&b[0])));
+    Ok(rows)
+}
+
+/// The data row of every per-offer CSV whose filename `keep` accepts,
+/// normalised to [`HEADER`]'s columns.
+///
+/// The index is never read: it is a copy of the others.
+fn read_rows(keep: impl Fn(&str) -> bool) -> Result<Vec<Vec<String>>> {
+    let dir = offers_dir()?;
     let mut rows = Vec::new();
     for entry in std::fs::read_dir(&dir)? {
         let path = entry?.path();
@@ -164,7 +185,7 @@ fn scan_offer(offer_id: &str) -> Result<Vec<Vec<String>>> {
         // literally called "todas". Nothing can produce that id today —
         // they are hex — but the id crosses the JNI boundary as a string
         // and the suffix rule is the only thing standing between them.
-        if name == INDEX_NAME || !name.ends_with(&suffix) {
+        if name == INDEX_NAME || !name.ends_with(".csv") || !keep(name) {
             continue;
         }
         let text = match std::fs::read_to_string(&path) {
@@ -183,19 +204,94 @@ fn scan_offer(offer_id: &str) -> Result<Vec<Vec<String>>> {
             None => tracing::warn!("linha ilegível em {}", path.display()),
         }
     }
-    // One row per account, newest kept. Putting the xuid in the
-    // filename left the file an older build wrote and the one this build
-    // writes both answering to the same suffix, and the same code listed
-    // twice reads as two rewards.
-    rows.sort_by(|a, b| a[1].cmp(&b[1]).then_with(|| b[7].cmp(&a[7])));
-    rows.dedup_by(|a, b| a[1] == b[1]);
-
-    // Newest first: the code someone just claimed is the one they want.
-    // The gamertag breaks ties because a batch claim writes several rows
-    // inside the same second, and read_dir order is whatever the
-    // filesystem feels like — the screen would reshuffle between reads.
-    rows.sort_by(|a, b| b[7].cmp(&a[7]).then_with(|| a[0].cmp(&b[0])));
     Ok(rows)
+}
+
+/// Every code ever recorded for one reward, as the history shows it.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct HistoryGroup {
+    /// The reward's name, or empty when no build ever had one for it.
+    pub title: String,
+    /// `external-link`, `store-token`, … of the newest claim.
+    pub resource_type: String,
+    /// Newest first.
+    pub codes: Vec<HistoryCode>,
+}
+
+/// One claim inside a [`HistoryGroup`].
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct HistoryCode {
+    pub gamertag: String,
+    pub offer_id: String,
+    pub code: String,
+    pub claimed_date: String,
+}
+
+/// Everything ever claimed, across every account and every month,
+/// grouped by reward.
+///
+/// Grouped by **name**, not by offer id: the Discord perk comes back as
+/// a new offer every time it is renewed, and what the user is looking
+/// for is "all my Discord codes", not one list per GUID. An offer no
+/// build ever had a name for keeps a group of its own, by id, rather
+/// than being merged with every other nameless one.
+///
+/// # Errors
+/// Propagates filesystem failures; one unreadable file is skipped.
+pub fn history() -> Result<Vec<HistoryGroup>> {
+    Ok(group_history(read_rows(|_| true)?))
+}
+
+fn group_history(mut rows: Vec<Vec<String>>) -> Vec<HistoryGroup> {
+    // A row with no code is a claim nothing can be done with.
+    rows.retain(|r| !r[6].trim().is_empty());
+    // One row per account and offer, newest kept — the same rule as
+    // the single-reward view, for the same legacy-filename reason.
+    rows.sort_by(|a, b| {
+        (&a[1], &a[2])
+            .cmp(&(&b[1], &b[2]))
+            .then_with(|| b[7].cmp(&a[7]))
+    });
+    rows.dedup_by(|a, b| a[1] == b[1] && a[2] == b[2]);
+    // Newest first everywhere, gamertag breaking ties so the order does
+    // not depend on read_dir.
+    rows.sort_by(|a, b| b[7].cmp(&a[7]).then_with(|| a[0].cmp(&b[0])));
+
+    // A name that some file carries for an offer applies to all of its
+    // files: a claim made before the feed was reachable has a blank
+    // title column, while a later write of the same offer does not.
+    let mut names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for r in &rows {
+        if !r[3].trim().is_empty() {
+            names.entry(r[2].clone()).or_insert_with(|| r[3].trim().to_string());
+        }
+    }
+
+    let mut groups: Vec<HistoryGroup> = Vec::new();
+    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for r in rows {
+        let title = names.get(&r[2]).cloned().unwrap_or_default();
+        let key = if title.is_empty() {
+            format!("id:{}", r[2])
+        } else {
+            format!("t:{}", title.to_lowercase())
+        };
+        let i = *index.entry(key).or_insert_with(|| {
+            groups.push(HistoryGroup {
+                title: title.clone(),
+                resource_type: r[5].clone(),
+                codes: Vec::new(),
+            });
+            groups.len() - 1
+        });
+        groups[i].codes.push(HistoryCode {
+            gamertag: r[0].clone(),
+            offer_id: r[2].clone(),
+            code: r[6].clone(),
+            claimed_date: r[7].clone(),
+        });
+    }
+    groups
 }
 
 /// Bring a row up to the column list [`HEADER`] declares.
@@ -489,6 +585,56 @@ mod tests {
         assert_eq!(row[3], "", "the missing column is the title");
         assert_eq!(row[6], "https://x.test/a");
         assert_eq!(row[7], "2026-07-28T17:45:59Z");
+    }
+
+    fn row(tag: &str, xuid: &str, id: &str, title: &str, code: &str, date: &str) -> Vec<String> {
+        [tag, xuid, id, title, "claimed", "external-link", code, date, "BR"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect()
+    }
+
+    /// Two months of the Discord perk are two offer ids and one reward:
+    /// the history must list every code under one name, newest first,
+    /// across accounts.
+    #[test]
+    fn history_groups_renewed_offers_by_name() {
+        let groups = group_history(vec![
+            row("a", "1", "OLD", "Discord Nitro", "https://d/1", "2026-07-01T00:00:00Z"),
+            row("b", "2", "NEW", "Discord Nitro", "https://d/2", "2026-10-01T00:00:00Z"),
+            row("a", "1", "PUBG", "PUBG: BATTLEGROUNDS", "TOKEN", "2026-08-01T00:00:00Z"),
+        ]);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].title, "Discord Nitro", "newest claim first");
+        let codes: Vec<&str> = groups[0].codes.iter().map(|c| c.code.as_str()).collect();
+        assert_eq!(codes, ["https://d/2", "https://d/1"]);
+    }
+
+    /// A claim written before the names feed answered has a blank title;
+    /// a later write of the same offer has one, and it applies to both.
+    #[test]
+    fn history_borrows_a_name_from_another_file_of_the_same_offer() {
+        let groups = group_history(vec![
+            row("a", "1", "X", "", "c1", "2026-07-01T00:00:00Z"),
+            row("b", "2", "X", "Delta Force", "c2", "2026-07-02T00:00:00Z"),
+        ]);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].title, "Delta Force");
+        assert_eq!(groups[0].codes.len(), 2);
+    }
+
+    /// Nameless offers are kept apart by id, not lumped together; a row
+    /// with no code is dropped; a legacy duplicate is listed once.
+    #[test]
+    fn history_keeps_nameless_offers_apart_and_skips_empties() {
+        let groups = group_history(vec![
+            row("a", "1", "A", "", "ca", "2026-07-01T00:00:00Z"),
+            row("a", "1", "B", "", "cb", "2026-07-02T00:00:00Z"),
+            row("a", "1", "B", "", "cb", "2026-07-02T00:00:00Z"),
+            row("a", "1", "C", "Sem código", "", "2026-07-03T00:00:00Z"),
+        ]);
+        assert_eq!(groups.len(), 2);
+        assert!(groups.iter().all(|g| g.codes.len() == 1));
     }
 
     /// What both readers do to one line, in one place.

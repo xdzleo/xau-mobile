@@ -225,7 +225,12 @@ fun StoreScreen(
     BackHandler(onBack = back)
 
     buying?.let { (form, title) ->
-        PurchasePage(form = form, title = title, onClose = { buying = null })
+        PurchasePage(
+            form = form,
+            title = title,
+            profile = remember(account.xuid) { WebProfiles.profileOf(ctx, account.xuid) },
+            onClose = { buying = null },
+        )
         return
     }
 
@@ -727,7 +732,7 @@ private fun ProductSheet(p: StoreProduct, favorite: Boolean, onFavorite: () -> U
 /** The Store's product page, in the app, where the purchase is made. */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun PurchasePage(form: PurchaseForm, title: String, onClose: () -> Unit) {
+private fun PurchasePage(form: PurchaseForm, title: String, profile: String?, onClose: () -> Unit) {
     val c = Xau.colors
     var web by remember { mutableStateOf<WebView?>(null) }
     BackHandler {
@@ -747,13 +752,17 @@ private fun PurchasePage(form: PurchaseForm, title: String, onClose: () -> Unit)
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
                 WebView(ctx).apply {
+                    // This account's own profile, before anything else
+                    // touches the view (see WebProfiles).
+                    WebProfiles.apply(this, profile)
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
                     // The Store checks the Microsoft session through
                     // login.live.com in an iframe; without third-party
                     // cookies that check fails and it asks to sign in again.
-                    CookieManager.getInstance().setAcceptCookie(true)
-                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                    val jar = WebProfiles.cookies(profile)
+                    jar.setAcceptCookie(true)
+                    jar.setAcceptThirdPartyCookies(this, true)
                     // The checkout refuses a form posted from no origin, so
                     // it is posted from a page on its own host.
                     var posted = form.action.isEmpty()

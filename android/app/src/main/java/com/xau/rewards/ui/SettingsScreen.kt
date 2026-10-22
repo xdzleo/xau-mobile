@@ -52,7 +52,11 @@ import com.xau.rewards.ui.theme.Xau
  * on each update, so there is no "save" and a running farm follows along.
  */
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(
+    onBack: () -> Unit,
+    singleActive: Boolean = false,
+    onSingleActive: (Boolean) -> Unit = {},
+) {
     val c = Xau.colors
     val context = LocalContext.current
     val prefs = remember { Prefs(context) }
@@ -84,7 +88,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 contentAlignment = Alignment.Center,
             ) { Text("‹", style = Xau.type.hero, color = c.textPrimary) }
             Spacer(Modifier.width(Space.sm))
-            Text("Configurações", style = Xau.type.section, color = c.textPrimary)
+            Text("Ajustes", style = Xau.type.section, color = c.textPrimary)
         }
 
         Column(
@@ -136,6 +140,18 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
 
             Box(Modifier.entrance(1)) {
+                Group("Contas") {
+                    Toggle(
+                        title = "Uma conta ativa por vez",
+                        detail = "Só uma conta fica descongelada. Descongelar outra congela as demais " +
+                            "na hora e para o farm delas.",
+                        checked = singleActive,
+                        onChange = onSingleActive,
+                    )
+                }
+            }
+
+            Box(Modifier.entrance(2)) {
                 Group("Sobre") {
                     Info("Versão", appVersion(context))
                     Divider()

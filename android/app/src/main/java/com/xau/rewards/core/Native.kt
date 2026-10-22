@@ -150,6 +150,13 @@ object Api {
 
     suspend fun refresh(): List<Account> = arr("refresh").toAccounts()
 
+    /** "Uma conta ativa por vez" is on. */
+    suspend fun singleActive(): Boolean = obj("single_active").optBoolean("on")
+
+    /** Turn "Uma conta ativa por vez" on (freezing all but one) or off. */
+    suspend fun setSingleActive(on: Boolean): List<Account> =
+        arr("set_single_active", JSONObject().put("on", if (on) "1" else "0")).toAccounts()
+
     /** Freeze an account (no request goes out for it) or bring it back. */
     suspend fun setFrozen(xuid: String, frozen: Boolean): List<Account> =
         arr("set_frozen", JSONObject().put("xuid", xuid).put("frozen", if (frozen) "1" else "0")).toAccounts()
@@ -294,6 +301,20 @@ object Api {
      * One account's Rewards level (1-3), read live. Null when the service
      * did not report one, which is not the same as level 1.
      */
+    /** Every level-up the app has seen, newest first. No request is made. */
+    suspend fun levelLog(): List<LevelUpEntry> =
+        arr("level_log").map {
+            LevelUpEntry(
+                xuid = it.getString("xuid"),
+                gamertag = it.optString("gamertag"),
+                gamerpic = it.optString("gamerpic"),
+                from = it.getLong("from"),
+                to = it.getLong("to"),
+                at = it.getLong("at"),
+                peak = if (it.isNull("peak")) null else it.getLong("peak"),
+            )
+        }
+
     suspend fun rewardsLevel(xuid: String): Long? =
         obj("rewards", JSONObject().put("xuid", xuid)).let {
             if (it.isNull("level")) null else it.getLong("level")
@@ -365,13 +386,14 @@ object Api {
         }
 
     /**
-     * Claim every available offer across every account.
+     * Claim every available offer across every account — or, given
+     * [offerId], only that one reward, on every account that has it.
      *
      * IRREVERSIBLE. Each reward is written to its own CSV on the device
      * before it is reported here.
      */
-    suspend fun claimOffersAll(): ClaimOffersResult {
-        val r = obj("claim_offers_all")
+    suspend fun claimOffersAll(offerId: String? = null): ClaimOffersResult {
+        val r = obj("claim_offers_all", JSONObject().apply { offerId?.let { put("offerId", it) } })
         val claimed = r.getJSONArray("claimed").let { list ->
             (0 until list.length()).map { i ->
                 val c = list.getJSONObject(i)
@@ -397,6 +419,26 @@ object Api {
             indexCsv = if (r.isNull("indexCsv")) null else r.getString("indexCsv"),
         )
     }
+
+    /** Every code ever claimed, grouped by reward name, newest first. */
+    suspend fun offerHistory(): List<OfferHistoryGroup> =
+        arr("offer_history").map { g ->
+            OfferHistoryGroup(
+                title = g.optString("title"),
+                resourceType = g.optString("resource_type").ifBlank { null },
+                codes = g.getJSONArray("codes").let { list ->
+                    (0 until list.length()).map { i ->
+                        val c = list.getJSONObject(i)
+                        OfferHistoryCode(
+                            gamertag = c.optString("gamertag"),
+                            offerId = c.optString("offer_id"),
+                            code = c.optString("code"),
+                            claimedDate = c.optString("claimed_date"),
+                        )
+                    }
+                },
+            )
+        }
 
     /** Codes recorded for one offer, newest first, across all accounts. */
     suspend fun offerCodes(offerId: String): List<OfferCode> =
@@ -459,6 +501,12 @@ data class Account(
     val missionsDone: Int? = null,
     /** Game Pass tier as the service names it. Null = no membership. */
     val gamepass: String? = null,
+    /** Every point the account ever earned. Null until a read reports it. */
+    val lifetime: Long? = null,
+    /** Progress towards the next Rewards level, this period. */
+    val tierProgress: TierProgress? = null,
+    /** The day it joined Microsoft Rewards, `YYYY-MM-DD`. */
+    val memberSince: String? = null,
     /** Seen at sign-in. Null for accounts restored from an older store. */
     val email: String? = null,
     val active: Boolean,
@@ -472,6 +520,29 @@ data class Account(
 )
 
 data class ClaimOutcome(val pointsAdded: Long, val accounts: List<Account>)
+
+/** The way to the next Rewards level: `progress` of `max` points this period. */
+data class TierProgress(
+    val tier: String,
+    /** Null at the top level. */
+    val next: String?,
+    val progress: Long,
+    val max: Long,
+    /** What the next level asks for, in the service's words. */
+    val requirement: String?,
+)
+
+/** One Rewards level-up: who, from/to, when (unix seconds), best balance. */
+data class LevelUpEntry(
+    val xuid: String,
+    val gamertag: String,
+    val gamerpic: String,
+    val from: Long,
+    val to: Long,
+    val at: Long,
+    /** The highest balance this account ever showed in the app. */
+    val peak: Long?,
+)
 
 data class LoginOutcome(val accounts: List<Account>, val warning: String?)
 
@@ -582,6 +653,21 @@ data class OfferCode(
     val claimedDate: String,
 )
 
+/** One reward in the claim history, with every code it ever minted. */
+data class OfferHistoryGroup(
+    /** Blank when no build ever had a name for it. */
+    val title: String,
+    val resourceType: String?,
+    val codes: List<OfferHistoryCode>,
+)
+
+data class OfferHistoryCode(
+    val gamertag: String,
+    val offerId: String,
+    val code: String,
+    val claimedDate: String,
+)
+
 data class OfferCsvFile(
     val fileName: String,
     val text: String,
@@ -681,6 +767,17 @@ private fun JSONArray.toAccounts(): List<Account> = map { o ->
         missionsOpen = if (o.isNull("missionsOpen")) null else o.getInt("missionsOpen"),
         missionsDone = if (o.isNull("missionsDone")) null else o.getInt("missionsDone"),
         gamepass = if (o.isNull("gamepass")) null else o.getString("gamepass"),
+        lifetime = if (!o.has("lifetime") || o.isNull("lifetime")) null else o.getLong("lifetime"),
+        tierProgress = o.optJSONObject("tierProgress")?.let { t ->
+            TierProgress(
+                tier = t.optString("tier"),
+                next = if (t.isNull("next")) null else t.optString("next").ifEmpty { null },
+                progress = t.optLong("progress"),
+                max = t.optLong("max").coerceAtLeast(1),
+                requirement = if (t.isNull("requirement")) null else t.optString("requirement").ifEmpty { null },
+            )
+        },
+        memberSince = if (!o.has("memberSince") || o.isNull("memberSince")) null else o.getString("memberSince"),
         email = if (o.isNull("email")) null else o.getString("email"),
         active = o.optBoolean("active"),
         staleReason = if (o.isNull("staleReason")) null else o.getString("staleReason"),

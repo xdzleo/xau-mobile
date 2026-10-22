@@ -47,6 +47,7 @@ import com.xau.rewards.core.AccountOffers
 import com.xau.rewards.core.Api
 import com.xau.rewards.core.ClaimOffersResult
 import com.xau.rewards.core.OfferCode
+import com.xau.rewards.core.OfferHistoryGroup
 import com.xau.rewards.ui.theme.Radius
 import com.xau.rewards.ui.theme.Space
 import com.xau.rewards.ui.theme.Xau
@@ -81,7 +82,10 @@ fun OffersScreen(onBack: () -> Unit) {
     var confirming by remember { mutableStateOf(false) }
     var claiming by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<ClaimOffersResult?>(null) }
-    var open by remember { mutableStateOf<OfferGroup?>(null) }
+    // The id, not the group: a claim from the detail reloads the list,
+    // and the detail must then show the counts that came back.
+    var openId by remember { mutableStateOf<String?>(null) }
+    var showHistory by remember { mutableStateOf(false) }
 
     suspend fun load() {
         runCatching { Api.offersAll() }
@@ -91,21 +95,40 @@ fun OffersScreen(onBack: () -> Unit) {
 
     LaunchedEffect(Unit) { load() }
 
-    BackHandler { if (open != null) open = null else onBack() }
+    BackHandler {
+        when {
+            showHistory -> showHistory = false
+            openId != null -> openId = null
+            else -> onBack()
+        }
+    }
 
-    open?.let { group ->
-        OfferCodesScreen(group, onBack = { open = null }) {
+    if (showHistory) {
+        OfferHistoryScreen(onBack = { showHistory = false }) {
             clipboard.setText(AnnotatedString(it))
         }
         return
     }
 
     val groups = remember(accounts) { group(accounts.orEmpty()) }
+
+    groups.find { it.offerId == openId }?.let { group ->
+        OfferCodesScreen(
+            group,
+            onBack = { openId = null },
+            onClaimed = { load() },
+        ) {
+            clipboard.setText(AnnotatedString(it))
+        }
+        return
+    }
+
     val available = groups.sumOf { it.available }
     val failed = accounts.orEmpty().filter { it.error != null }
 
     if (confirming) {
         ClaimConfirmDialog(
+            title = "Resgatar $available vantagens?",
             count = available,
             accounts = accounts.orEmpty().size - failed.size,
             onConfirm = {
@@ -134,6 +157,7 @@ fun OffersScreen(onBack: () -> Unit) {
             accounts = accounts.orEmpty().size - failed.size,
             claiming = claiming,
             onClaim = { confirming = true },
+            onHistory = { showHistory = true },
         )
 
         when {
@@ -173,7 +197,7 @@ fun OffersScreen(onBack: () -> Unit) {
                         )
                     }
                 }
-                items(groups.size) { i -> OfferCard(groups[i]) { open = groups[i] } }
+                items(groups.size) { i -> OfferCard(groups[i]) { openId = groups[i].offerId } }
             }
         }
     }
@@ -232,6 +256,7 @@ private fun Header(
     accounts: Int,
     claiming: Boolean,
     onClaim: () -> Unit,
+    onHistory: () -> Unit,
 ) {
     val c = Xau.colors
     Column {
@@ -252,6 +277,19 @@ private fun Header(
                     style = Xau.type.caption,
                     color = c.textSecondary,
                 )
+            }
+            // Always reachable, even while the live list is loading or
+            // has failed: the history is read from disk, not the network.
+            Box(
+                Modifier
+                    .height(Space.touch)
+                    .clip(RoundedCornerShape(Radius.pill))
+                    .background(c.surfaceHigh)
+                    .clickable(onClick = onHistory)
+                    .padding(horizontal = Space.lg),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("Resgatados", style = Xau.type.button, color = c.textPrimary)
             }
         }
 
@@ -284,6 +322,7 @@ private fun Header(
  */
 @Composable
 private fun ClaimConfirmDialog(
+    title: String,
     count: Int,
     accounts: Int,
     onConfirm: () -> Unit,
@@ -295,7 +334,7 @@ private fun ClaimConfirmDialog(
         containerColor = c.surfaceHigh,
         shape = RoundedCornerShape(Radius.card),
         title = {
-            Text("Resgatar $count vantagens?", style = Xau.type.section, color = c.textPrimary)
+            Text(title, style = Xau.type.section, color = c.textPrimary)
         },
         text = {
             Text(
@@ -422,11 +461,18 @@ private fun status(g: OfferGroup): String = when {
  * claiming writes before it reports.
  */
 @Composable
-private fun OfferCodesScreen(g: OfferGroup, onBack: () -> Unit, onCopy: (String) -> Unit) {
+private fun OfferCodesScreen(
+    g: OfferGroup,
+    onBack: () -> Unit,
+    onClaimed: suspend () -> Unit,
+    onCopy: (String) -> Unit,
+) {
     val c = Xau.colors
     val scope = rememberCoroutineScope()
     var rows by remember(g.offerId) { mutableStateOf<List<OfferCode>?>(null) }
     var error by remember(g.offerId) { mutableStateOf<String?>(null) }
+    var confirming by remember(g.offerId) { mutableStateOf(false) }
+    var claiming by remember(g.offerId) { mutableStateOf(false) }
     // Which row was just copied. Android 13 draws its own clipboard
     // bubble, but nothing below it does, and a tap that appears to do
     // nothing reads as a broken button.
@@ -435,10 +481,42 @@ private fun OfferCodesScreen(g: OfferGroup, onBack: () -> Unit, onCopy: (String)
     var notice by remember(g.offerId) { mutableStateOf<String?>(null) }
     val context = LocalContext.current
 
-    LaunchedEffect(g.offerId) {
+    suspend fun loadRows() {
         runCatching { Api.offerCodes(g.offerId) }
-            .onSuccess { rows = it }
+            .onSuccess { rows = it; error = null }
             .onFailure { error = it.message }
+    }
+
+    LaunchedEffect(g.offerId) { loadRows() }
+
+    // This reward only, on every account that still has it. The same
+    // irreversible claim as "Resgatar todas", so the same confirmation;
+    // the codes it mints land in the CSV first, then on this screen.
+    if (confirming) {
+        ClaimConfirmDialog(
+            title = "Resgatar ${g.title}?",
+            count = g.available,
+            accounts = g.available,
+            onConfirm = {
+                confirming = false
+                claiming = true
+                notice = null
+                scope.launch {
+                    runCatching { Api.claimOffersAll(g.offerId) }
+                        .onSuccess { r ->
+                            notice = when {
+                                r.failures.isNotEmpty() -> "falhou: ${r.failures.first()}"
+                                else -> plural(r.claimed.size, "1 resgate feito", "${r.claimed.size} resgates feitos")
+                            }
+                        }
+                        .onFailure { notice = "não deu para resgatar: ${it.message}" }
+                    loadRows()
+                    onClaimed()
+                    claiming = false
+                }
+            },
+            onDismiss = { confirming = false },
+        )
     }
 
     // The system's own save dialog. The CSVs live in the app's private
@@ -503,9 +581,40 @@ private fun OfferCodesScreen(g: OfferGroup, onBack: () -> Unit, onCopy: (String)
                         }
                         ?: "lendo o CSV…",
                     style = Xau.type.caption,
-                    color = if (notice != null) c.green else c.textSecondary,
+                    color = when {
+                        notice?.startsWith("falhou") == true ||
+                            notice?.startsWith("não deu") == true -> c.danger
+                        notice != null -> c.green
+                        else -> c.textSecondary
+                    },
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+
+        if (g.available > 0 || claiming) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Space.gutter)
+                    .height(Space.touch)
+                    .clip(RoundedCornerShape(Radius.control))
+                    .background(if (claiming) c.surfaceHigh else c.greenDeep)
+                    .clickable(enabled = !claiming) { confirming = true },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    when {
+                        claiming -> "Resgatando…"
+                        g.available == 1 -> "Resgatar"
+                        else -> "Resgatar em ${g.available} contas"
+                    },
+                    style = Xau.type.button,
+                    color = if (claiming) c.textMuted else c.onGreen,
+                )
+            }
+            Spacer(Modifier.height(Space.md))
         }
 
         // Both actions, side by side and equal. Neither fits beside a
@@ -588,6 +697,144 @@ private fun OfferCodesScreen(g: OfferGroup, onBack: () -> Unit, onCopy: (String)
     }
 }
 
+// -------------------------------------------------------------- history
+
+/**
+ * Every code ever claimed, every account, every month, by reward.
+ *
+ * The live list only knows what the service still returns for the
+ * accounts signed in right now. This is the record: the CSVs on the
+ * device, so a Discord link from three renewals ago — or from an
+ * account since removed — is still here under "Discord Nitro".
+ */
+@Composable
+private fun OfferHistoryScreen(onBack: () -> Unit, onCopy: (String) -> Unit) {
+    val c = Xau.colors
+    val scope = rememberCoroutineScope()
+    var groups by remember { mutableStateOf<List<OfferHistoryGroup>?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    // "group:row" of the code just copied; "group:*" for a whole group.
+    var copied by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        runCatching { Api.offerHistory() }
+            .onSuccess { groups = it }
+            .onFailure { error = it.message }
+    }
+
+    fun flash(key: String) {
+        copied = key
+        scope.launch {
+            kotlinx.coroutines.delay(1_600)
+            if (copied == key) copied = null
+        }
+    }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(c.ink)
+            .windowInsetsPadding(WindowInsets.safeDrawing),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(Space.gutter),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.size(Space.touch).clip(RoundedCornerShape(Radius.pill))
+                    .clickable(onClick = onBack),
+                contentAlignment = Alignment.Center,
+            ) { Text("‹", style = Xau.type.hero, color = c.textPrimary) }
+            Spacer(Modifier.width(Space.sm))
+            Column(Modifier.weight(1f)) {
+                Text("Resgatados", style = Xau.type.section, color = c.textPrimary)
+                Text(
+                    groups?.let { g ->
+                        val n = g.sumOf { it.codes.size }
+                        "${plural(n, "1 código", "$n códigos")} em " +
+                            plural(g.size, "1 vantagem", "${g.size} vantagens")
+                    } ?: "lendo os CSVs…",
+                    style = Xau.type.caption,
+                    color = c.textSecondary,
+                )
+            }
+        }
+
+        val list = groups
+        when {
+            error != null -> StateBlock(
+                title = "Não foi possível ler os resgates",
+                detail = error.orEmpty(),
+                tone = c.danger,
+            )
+
+            list == null -> Column(
+                Modifier.fillMaxWidth().padding(Space.gutter),
+                verticalArrangement = Arrangement.spacedBy(Space.md),
+            ) { repeat(3) { DotLeader(220.dp) } }
+
+            list.isEmpty() -> StateBlock(
+                title = "Nenhum resgate ainda",
+                detail = "Cada vantagem resgatada por este app fica salva aqui, " +
+                    "com o código ou link, para sempre.",
+            )
+
+            else -> LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    start = Space.gutter, end = Space.gutter, bottom = Space.xxl,
+                ),
+                verticalArrangement = Arrangement.spacedBy(Space.sm),
+            ) {
+                list.forEachIndexed { gi, g ->
+                    item(key = "h$gi") {
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = Space.md),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    g.title.ifBlank { prettyType(g.resourceType) },
+                                    style = Xau.type.rowTitle,
+                                    color = c.textPrimary,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    plural(g.codes.size, "1 código", "${g.codes.size} códigos"),
+                                    style = Xau.type.caption,
+                                    color = c.textMuted,
+                                )
+                            }
+                            Spacer(Modifier.width(Space.sm))
+                            val codes = g.codes.map { it.code }.filter { it.isNotBlank() }
+                            Action(
+                                if (copied == "$gi:*") "Copiado" else "Copiar tudo",
+                            ) {
+                                // One per line, same as the reward's own screen.
+                                onCopy(codes.joinToString("\n"))
+                                flash("$gi:*")
+                            }
+                        }
+                    }
+                    g.codes.forEachIndexed { ci, code ->
+                        item(key = "c$gi:$ci") {
+                            CodeRow(
+                                OfferCode(code.gamertag, code.code, code.claimedDate),
+                                justCopied = copied == "$gi:$ci",
+                                showAccount = true,
+                            ) {
+                                onCopy(code.code)
+                                flash("$gi:$ci")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /** One of the screen's two actions. Same weight, same shape. */
 @Composable
 private fun Action(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
@@ -622,7 +869,12 @@ private fun CodesHeader() {
 }
 
 @Composable
-private fun CodeRow(r: OfferCode, justCopied: Boolean, onCopy: () -> Unit) {
+private fun CodeRow(
+    r: OfferCode,
+    justCopied: Boolean,
+    showAccount: Boolean = false,
+    onCopy: () -> Unit,
+) {
     val c = Xau.colors
     Column(
         Modifier
@@ -645,7 +897,17 @@ private fun CodeRow(r: OfferCode, justCopied: Boolean, onCopy: () -> Unit) {
         )
         Spacer(Modifier.height(Space.sm))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(prettyDate(r.claimedDate), style = Xau.type.caption, color = c.textSecondary)
+            Text(
+                if (showAccount && r.gamertag.isNotBlank()) {
+                    "${r.gamertag} · ${prettyDate(r.claimedDate)}"
+                } else {
+                    prettyDate(r.claimedDate)
+                },
+                style = Xau.type.caption,
+                color = c.textSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
             Spacer(Modifier.weight(1f))
             Text(
                 if (justCopied) "copiado" else "copiar",
